@@ -58,19 +58,31 @@ def train_and_upload():
             
         print(f"🧠 Обробка та тренування моделі для {ticker}...")
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)        
-        df.index = pd.to_datetime(df.index,utc=True)
+        df.index = pd.to_datetime(df.index,utc=True).normalize()
 
 	# 🚀  ЗАВАНТАЖЕННЯ ТА ПІДГОТОВКА ДАНИХ S&P 500
         sp500_path = "data/SP500_history.csv"
         if os.path.exists(sp500_path):
             sp500_df = pd.read_csv(sp500_path, index_col=0, parse_dates=True)
-            sp500_df.index = pd.to_datetime(sp500_df.index, utc=True)
+            sp500_df.index = pd.to_datetime(sp500_df.index, utc=True).normalize()
             
             # Рахуємо добову доходність усього ринку
             df['SP500_Return'] = sp500_df['Close'].pct_change(fill_method=None)
         else:
             print("⚠️ Файл S&P 500 не знайдено! Модель вчитиметься без макро-контексту.")
             df['SP500_Return'] = 0  # Заглушка, якщо файлу немає
+
+	# 🚀  НОВЕ: ЗАВАНТАЖЕННЯ ТА ПІД КЛЕЙКА ІНДЕКСУ СТРАХУ VIX
+        vix_path = "data/VIX_history.csv"
+        if os.path.exists(vix_path):
+            vix_df = pd.read_csv(vix_path, index_col=0, parse_dates=True)
+            vix_df.index = pd.to_datetime(vix_df.index, utc=True).normalize()
+            
+            # Для VIX беремо чисте значення Close (рівень страху), а не відсоток зміни
+            df['VIX_Close'] = vix_df['Close']
+        else:
+            print("⚠️ Файл VIX не знайдено! Використовуємо дефолтний спокійний рівень.")
+            df['VIX_Close'] = 15.0  # Базова заглушка нормального ринку
 
         # Розрахунок технічних індикаторів (Фічі)
         df['MA_5'] = df['Close'].rolling(window=5).mean()
@@ -107,7 +119,8 @@ def train_and_upload():
 	    "Gap",
             "Day_of_Week",
             "Volume_Ratio",
-            "SP500_Return"
+            "SP500_Return",
+            "VIX_Close"
         ]        
  
         # Спліт на Train/Test (Останні 20 днів для валідації метрик)
