@@ -1,0 +1,53 @@
+# === MLOps & Project Data ===
+# Ігноруємо сирі та оброблені датасети (твій AAPL_history.csv не увійде в комміт)
+data/
+*.csv
+*.parquet
+*.json
+
+# === Python & Virtual Environments ===
+# Кеш компіляції Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Віртуальні середовища (залежно від того, як ти його назвав)
+.venv/
+venv/
+env/
+ENV/
+
+# Розподіл та пакети
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# === IDE & OS specific files ===
+# Конфігурації редакторів (VS Code, PyCharm)
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db
+
+# === Environment Variables / Secrets ===
+# Якщо з'являться API-ключі або паролі до баз даних
+.env
+.secrets
