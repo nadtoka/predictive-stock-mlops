@@ -57,9 +57,20 @@ def train_and_upload():
             continue
             
         print(f"🧠 Обробка та тренування моделі для {ticker}...")
-        df = pd.read_csv(data_path, index_col=0, parse_dates=True)
-        
+        df = pd.read_csv(data_path, index_col=0, parse_dates=True)        
         df.index = pd.to_datetime(df.index,utc=True)
+
+	# 🚀  ЗАВАНТАЖЕННЯ ТА ПІДГОТОВКА ДАНИХ S&P 500
+        sp500_path = "data/SP500_history.csv"
+        if os.path.exists(sp500_path):
+            sp500_df = pd.read_csv(sp500_path, index_col=0, parse_dates=True)
+            sp500_df.index = pd.to_datetime(sp500_df.index, utc=True)
+            
+            # Рахуємо добову доходність усього ринку
+            df['SP500_Return'] = sp500_df['Close'].pct_change(fill_method=None)
+        else:
+            print("⚠️ Файл S&P 500 не знайдено! Модель вчитиметься без макро-контексту.")
+            df['SP500_Return'] = 0  # Заглушка, якщо файлу немає
 
         # Розрахунок технічних індикаторів (Фічі)
         df['MA_5'] = df['Close'].rolling(window=5).mean()
@@ -95,7 +106,8 @@ def train_and_upload():
 	    "Day_Range",
 	    "Gap",
             "Day_of_Week",
-            "Volume_Ratio"
+            "Volume_Ratio",
+            "SP500_Return"
         ]        
  
         # Спліт на Train/Test (Останні 20 днів для валідації метрик)

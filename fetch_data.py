@@ -52,6 +52,16 @@ if __name__ == "__main__":
     for ticker in tickers:
         if fetch_stock_data(ticker=ticker):
             success_count += 1
+    # 🚀 ОЦЕ СЮДИ ВСТАВЛЯЄМО: Автоматичне завантаження S&P 500
+    print("📊 Завантаження макро-контексту: S&P 500 (^GSPC)...")
+    try:
+        sp500 = yf.Ticker("^GSPC")
+        sp500_df = sp500.history(period="5y")
+        if not sp500_df.empty:
+            sp500_df.to_csv("data/SP500_history.csv")
+            print("✅ Дані S&P 500 успішно збережено в data/SP500_history.csv")
+    except Exception as e:
+        print(f"❌ Помилка завантаження S&P 500: {e}")
             
     print(f"🏁 Обробку завершено. Успішно зібрано: {success_count}/{len(tickers)}")
     
