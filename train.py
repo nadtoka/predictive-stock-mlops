@@ -59,6 +59,8 @@ def train_and_upload():
         print(f"🧠 Обробка та тренування моделі для {ticker}...")
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)
         
+        df.index = pd.to_datetime(df.index,utc=True)
+
         # Розрахунок технічних індикаторів (Фічі)
         df['MA_5'] = df['Close'].rolling(window=5).mean()
         df['MA_20'] = df['Close'].rolling(window=20).mean()
@@ -69,6 +71,10 @@ def train_and_upload():
         df["Day_Range"] = (df["High"] - df["Low"]) / df["Low"]  # Розмах торгів
         df["Gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
         
+        df['Day_of_Week'] = df.index.dayofweek  # Понеділок = 0, П'ятниця = 4
+        df['Volume_MA15'] = df['Volume'].rolling(window=15).mean() # Середня палата об'єму за 15 днів
+        df['Volume_Ratio'] = df['Volume'] / df['Volume_MA15']     # Сплеск торгів (у скільки разів більший за норму)
+
         # Створюємо таргет (Ціна закриття наступного дня)
         df['Target'] = df['Close'].shift(-1)
         # Чистимо NaN, які утворилися через rolling, pct_change та shift
@@ -88,6 +94,8 @@ def train_and_upload():
 	    "Intraday_Return",
 	    "Day_Range",
 	    "Gap",
+            "Day_of_Week",
+            "Volume_Ratio"
         ]        
  
         # Спліт на Train/Test (Останні 20 днів для валідації метрик)
