@@ -123,3 +123,10 @@ predictive-stock-mlops/
 ├── predict.py              # Легковажний публічний клієнт для отримання безпарольних прогнозів
 └── requirements.txt        # Фіксовані версії бібліотек (scikit-learn, joblib, pandas, yfinance, curl_cffi)
 ```
+
+---
+
+## Інтерфейс Telegram бота
+
+![Telegram Operational Report](https://github.com/user-attachments/assets/2bba71be-3227-4fdb-92d3-0d999b37a3e8)
+
