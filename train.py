@@ -65,16 +65,31 @@ def train_and_upload():
         df['Daily_Return'] = df['Close'].pct_change(fill_method=None)
         df['Volatility_5'] = df['Daily_Return'].rolling(window=5).std()
         
+        df["Intraday_Return"] = (df["Close"] - df["Open"]) / df["Open"]  # Рух всередині дня
+        df["Day_Range"] = (df["High"] - df["Low"]) / df["Low"]  # Розмах торгів
+        df["Gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
+        
         # Створюємо таргет (Ціна закриття наступного дня)
         df['Target'] = df['Close'].shift(-1)
+        # Чистимо NaN, які утворилися через rolling, pct_change та shift
         df = df.dropna()
         
         if df.empty:
             print(f"❌ Недостатньо даних після створення індикаторів для {ticker}.")
             continue
             
-        feature_cols = ['Close', 'Volume', 'MA_5', 'MA_20', 'Daily_Return', 'Volatility_5']
-        
+        feature_cols = [
+	    "Close",
+	    "Volume",
+	    "MA_5",
+	    "MA_20",
+	    "Daily_Return",
+	    "Volatility_5",
+	    "Intraday_Return",
+	    "Day_Range",
+	    "Gap",
+        ]        
+ 
         # Спліт на Train/Test (Останні 20 днів для валідації метрик)
         train_df = df.iloc[:-20]
         test_df = df.iloc[-20:]
@@ -83,7 +98,14 @@ def train_and_upload():
         X_test, y_test = test_df[feature_cols], test_df['Target']
         
         # Навчання моделі
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        # model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model = RandomForestRegressor(
+    	n_estimators=200,      # Збільшили кількість дерев для стабільності
+    	max_depth=12,          # Обмежили глибину, щоб не зубрила шуми
+    	min_samples_leaf=3,    # Шукаємо загальні тренди, ігноруємо аномалії
+    	# n_jobs=-1,             # ТУРБО-РЕЖИМ: паралелимо на всі ядра CPU (ТИМЧАСОВО НЕ ПРАЦЮЄ ЧЕРЕЗ БАГ СУМІСНОСТІ З ОСТАНЬО ВЕРСІЄЮ ПАЙТОН)
+	random_state=42
+	)
         model.fit(X_train, y_train)
         
         # Валідація
