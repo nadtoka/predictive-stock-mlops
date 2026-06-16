@@ -1,4 +1,4 @@
-# Predictive Stock MLOps Project
+# Predictive Stock MLOps Project #
 
 Енд-ту-енд (End-to-End) MLOps проєкт для збору фінансових даних, навчання прогнозних моделей та побудови автоматизованого Pipeline для передбачення вартості акцій.
 
