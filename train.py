@@ -98,6 +98,14 @@ def train_and_upload():
         df['Volume_MA15'] = df['Volume'].rolling(window=15).mean() # Середня палата об'єму за 15 днів
         df['Volume_Ratio'] = df['Volume'] / df['Volume_MA15']     # Сплеск торгів (у скільки разів більший за норму)
 
+        # ДОДАЄМО RSI
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        # Запобігаємо діленню на нуль, якщо ринок стоїть на місці
+        rs = gain / loss.replace(0, 1e-9) 
+        df['RSI_14'] = 100 - (100 / (1 + rs))
+
         # Створюємо таргет (Ціна закриття наступного дня)
         df['Target'] = df['Close'].shift(-1)
         # Чистимо NaN, які утворилися через rolling, pct_change та shift
@@ -120,7 +128,8 @@ def train_and_upload():
             "Day_of_Week",
             "Volume_Ratio",
             "SP500_Return",
-            "VIX_Close"
+            "VIX_Close",
+            "RSI_14"
         ]        
  
         # Спліт на Train/Test (Останні 20 днів для валідації метрик)
