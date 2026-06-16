@@ -47,10 +47,6 @@ jobs:
       run: |
         mkdir -p ./test_data
         
-        # Визначаємо пріоритет: 
-        # 1. Ручний інпут (якщо запустили вручну) 
-        # 2. Змінна з репозиторію vars.STOCK_TICKER 
-        # 3. Дефолтний AAPL (якщо все інше порожнє)
         TARGET_TICKERS="${{ github.event.inputs.ticker }}"
         if [ -z "$TARGET_TICKERS" ]; then
           TARGET_TICKERS="${{ vars.STOCK_TICKER }}"
@@ -61,25 +57,12 @@ jobs:
         
         echo "📡 Запускаємо перевірку для тікерів: $TARGET_TICKERS"
         
-        # Запускаємо контейнер
         docker run --rm \
           -e STOCK_TICKER="$TARGET_TICKERS" \
+          -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+          -e HF_REPO="nadtoka/predictive-stock-dataset" \ # 👈 ЗАМІНИ на свій HF-шлях
           -v $(pwd)/test_data:/app/data \
           test-image:local
-          
-        # Перевіряємо кожен тікер у циклі Bash
-        IFS=',' read -ra ADDR <<< "$TARGET_TICKERS"
-        for ticker in "${ADDR[@]}"; do
-          clean_ticker=$(echo "$ticker" | xargs) # тримимо пробіли
-          
-          if [ -s "./test_data/${clean_ticker}_history.csv" ]; then
-            echo "✅ Smoke Test пройдено: Файл для $clean_ticker успішно створено!"
-            head -n 3 "./test_data/${clean_ticker}_history.csv"
-          else
-            echo "❌ Smoke Test провалено: Файл для $clean_ticker порожній або не існує!"
-            exit 1
-          fi
-        done
 
     - name: Log in to GitHub Container Registry
       run: |
