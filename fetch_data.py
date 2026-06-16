@@ -26,7 +26,7 @@ def upload_to_huggingface():
         print("ℹ️ HF_TOKEN або HF_REPO не знайдені. Пропускаємо завантаження на Hugging Face.")
         return
 
-    print(f"🚀 Починаємо синхронізацію датасету з Hugging Face репозиторієм: {hf_repo}...")
+    print(f"🚀 Починаємо синхронізацію датасету з Hugging Face репозиторієм: {hf_repo} ...")
     try:
         api = HfApi()
         api.upload_folder(
