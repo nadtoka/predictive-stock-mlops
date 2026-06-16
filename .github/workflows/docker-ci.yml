@@ -80,10 +80,15 @@ jobs:
     - name: Log in to GitHub Container Registry
       run: |
         echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-
+    
     - name: Push Docker image to GHCR
       run: |
-        for tag in ${{ steps.meta.outputs.tags }}; do
-          docker tag test-image:local $tag
-          docker push $tag
+        # Читаємо теги рядок за рядком через пайп
+        echo "${{ steps.meta.outputs.tags }}" | while read -r tag; do
+          # Перевіряємо, чи рядок не порожній
+          if [ ! -z "$tag" ]; then
+            echo "🏷️ Тегуємо та пушимо: $tag"
+            docker tag test-image:local "$tag"
+            docker push "$tag"
+          fi
         done
