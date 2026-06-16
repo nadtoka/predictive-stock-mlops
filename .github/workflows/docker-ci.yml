@@ -3,7 +3,11 @@ name: MLOps Build, Test and Push to GHCR
 on:
   push:
     branches: [ "main" ]
-  
+    paths-ignore:
+      - 'README.md'
+      - '.gitignore'
+      - 'data/**'
+
   workflow_dispatch:
     inputs:
       ticker:
