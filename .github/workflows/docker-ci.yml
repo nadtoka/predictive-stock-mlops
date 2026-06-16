@@ -1,18 +1,23 @@
-name: MLOps Build and Push to GHCR
+name: MLOps Build, Test and Push to GHCR
 
 on:
   push:
     branches: [ "main" ]
+  
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: 'Які тікери протестувати вручну? (через кому)'
+        required: false
+        default: ''
 
 env:
   REGISTRY: ghcr.io
-  # Вказуємо назву образу в нижньому регістрі (lowercase)
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  build-test-push:
     runs-on: self-hosted
-    # Надаємо права для запису пакетів у GHCR
     permissions:
       contents: read
       packages: write
@@ -20,14 +25,6 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-
-    # Логінимося в GHCR за допомогою системного токена, який GitHub генерує сам
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract Docker metadata
       id: meta
@@ -38,10 +35,55 @@ jobs:
           type=raw,value=latest
           type=sha,format=short
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+    - name: Build Docker image locally
+      run: |
+        docker build -t test-image:local .
+
+    - name: Run Smoke Test (Multi-Ticker Verification)
+      run: |
+        mkdir -p ./test_data
+        
+        # Визначаємо пріоритет: 
+        # 1. Ручний інпут (якщо запустили вручну) 
+        # 2. Змінна з репозиторію vars.STOCK_TICKER 
+        # 3. Дефолтний AAPL (якщо все інше порожнє)
+        TARGET_TICKERS="${{ github.event.inputs.ticker }}"
+        if [ -z "$TARGET_TICKERS" ]; then
+          TARGET_TICKERS="${{ vars.STOCK_TICKER }}"
+        fi
+        if [ -z "$TARGET_TICKERS" ]; then
+          TARGET_TICKERS="AAPL"
+        fi
+        
+        echo "📡 Запускаємо перевірку для тікерів: $TARGET_TICKERS"
+        
+        # Запускаємо контейнер
+        docker run --rm \
+          -e STOCK_TICKER="$TARGET_TICKERS" \
+          -v $(pwd)/test_data:/app/data \
+          test-image:local
+          
+        # Перевіряємо кожен тікер у циклі Bash
+        IFS=',' read -ra ADDR <<< "$TARGET_TICKERS"
+        for ticker in "${ADDR[@]}"; do
+          clean_ticker=$(echo "$ticker" | xargs) # тримимо пробіли
+          
+          if [ -s "./test_data/${clean_ticker}_history.csv" ]; then
+            echo "✅ Smoke Test пройдено: Файл для $clean_ticker успішно створено!"
+            head -n 3 "./test_data/${clean_ticker}_history.csv"
+          else
+            echo "❌ Smoke Test провалено: Файл для $clean_ticker порожній або не існує!"
+            exit 1
+          fi
+        done
+
+    - name: Log in to GitHub Container Registry
+      run: |
+        echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+    - name: Push Docker image to GHCR
+      run: |
+        for tag in ${{ steps.meta.outputs.tags }}; do
+          docker tag test-image:local $tag
+          docker push $tag
+        done
