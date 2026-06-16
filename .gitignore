@@ -35,6 +35,10 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# === MLOps Models ===
+models/
+*.joblib
+
 # === IDE & OS specific files ===
 # Конфігурації редакторів (VS Code, PyCharm)
 .idea/

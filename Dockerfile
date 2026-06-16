@@ -1,23 +1,21 @@
-# Використовуємо легковаговий офіційний образ Python
 FROM python:3.11-slim
 
-# Встановлюємо робочу директорію всередині контейнера
 WORKDIR /app
 
-# Окремо копіюємо requirements, щоб кешувати шари Docker
-COPY requirements.txt .
+# Встановлюємо системні залежності (якщо знадобляться для компіляції деяких ліб)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Встановлюємо залежності без збереження кешу pip (зменшуємо розмір образу)
+# Копіюємо залежності та інсталюємо їх
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копіюємо наш скрипт
-COPY fetch_data.py .
+# Копіюємо весь код проєкту
+COPY . .
 
-# За замовчуванням створюємо папку для даних всередині контейнера
-RUN mkdir data
+# Створюємо папки під дані та моделі всередині контейнера
+RUN mkdir -p data models
 
-# Вказуємо дефолтну змінну оточення
-ENV STOCK_TICKER="AAPL"
-
-# Точка входу — запуск нашого скрипту
+# За замовчуванням запускаємо збір даних, але це можна перевизначити при старті контейнера
 CMD ["python", "fetch_data.py"]

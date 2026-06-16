@@ -42,10 +42,10 @@ jobs:
     - name: Build Docker image locally
       run: |
         docker build -t test-image:local .
-
-    - name: Run Smoke Test (Multi-Ticker Verification)
+    
+    - name: Run Smoke Test (Multi-Ticker Ingestion & Train Verification)
       run: |
-        mkdir -p ./test_data
+        mkdir -p ./test_data ./test_models
         
         TARGET_TICKERS="${{ github.event.inputs.ticker }}"
         if [ -z "$TARGET_TICKERS" ]; then
@@ -55,14 +55,22 @@ jobs:
           TARGET_TICKERS="AAPL"
         fi
         
-        echo "📡 Запускаємо перевірку для тікерів: $TARGET_TICKERS"
-        
+        echo "📡 1. Запускаємо перевірку збору даних для: $TARGET_TICKERS"
         docker run --rm \
           -e STOCK_TICKER="$TARGET_TICKERS" \
           -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
-          -e HF_REPO="" \
+          -e HF_REPO="nadtoka/predictive-stock-dataset" \
           -v $(pwd)/test_data:/app/data \
-          test-image:local
+          test-image:local python fetch_data.py
+          
+        echo "🏗️ 2. Запускаємо перевірку тренування моделей для: $TARGET_TICKERS"
+        docker run --rm \
+          -e STOCK_TICKER="$TARGET_TICKERS" \
+          -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+          -e HF_MODEL_REPO="nadtoka/predictive-stock-models" \
+          -v $(pwd)/test_data:/app/data \
+          -v $(pwd)/test_models:/app/models \
+          test-image:local python train.py
 
     - name: Log in to GitHub Container Registry
       run: |
