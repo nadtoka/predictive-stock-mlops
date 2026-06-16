@@ -1,9 +1,12 @@
 import os
+import warnings
 import yfinance as yf
 import pandas as pd
 from huggingface_hub import HfApi
 
-def fetch_stock_data(ticker, period="1y"):
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+def fetch_stock_data(ticker, period="5y"):
     print(f"📡 Завантаження даних для {ticker}...")
     stock = yf.Ticker(ticker)
     df = stock.history(period=period)
