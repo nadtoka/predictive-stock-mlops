@@ -164,8 +164,8 @@ def train_and_upload():
         mae = mean_absolute_error(y_test, predictions)
         
         # Отримуємо фічі за СЬОГОДНІ для реального прогнозу на ЗАВТРА
-        latest_features = df[feature_cols].tail(1)
-        current_price = latest_features['Close'].values[0]
+        # latest_features = df[feature_cols].tail(1)
+        # current_price = latest_features['Close'].values[0]
         tomorrow_prediction = model.predict(latest_features)[0]
         
         # Зберігаємо ваги індивідуальної моделі
