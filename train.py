@@ -105,41 +105,40 @@ def train_and_upload():
         # Запобігаємо діленню на нуль, якщо ринок стоїть на місці
         rs = gain / loss.replace(0, 1e-9) 
         df['RSI_14'] = 100 - (100 / (1 + rs))
-        
-        # Сначала удаляем NaN только из колонок ФИЧ (это очистит первые 20 строк от скользящих средних)
-        df = df.dropna(subset=feature_cols)
-        
-        # Переносим сбор СВЕЖАЙШИХ фичей (пятницы) СЮДА — до сдвига таргета!
-        latest_features = df[feature_cols].tail(1).copy()
-        current_price = latest_features['Close'].values[0]
-
-        # Теперь создаем Target для обучения
-        df['Target'] = df['Close'].shift(-1)
-        
-        # Удаляем НАЙДЕННЫЙ NaN только из целевой переменной (это корректно удалит пятницу ИЗ ОБУЧАЮЩЕЙ выборки)
-        df = df.dropna(subset=['Target'])
-
-        
-        if df.empty:
-            print(f"❌ Недостатньо даних після створення індикаторів для {ticker}.")
-            continue
-            
+       
         feature_cols = [
-	    "Close",
-	    "Volume",
-	    "MA_5",
-	    "MA_20",
-	    "Daily_Return",
-	    "Volatility_5",
-	    "Intraday_Return",
-	    "Day_Range",
-	    "Gap",
+            "Close",
+            "Volume",
+            "MA_5",
+            "MA_20",
+            "Daily_Return",
+            "Volatility_5",
+            "Intraday_Return",
+            "Day_Range",
+            "Gap",
             "Day_of_Week",
             "Volume_Ratio",
             "SP500_Return",
             "VIX_Close",
             "RSI_14"
-        ]        
+        ]
+ 
+        # Сначала удаляем NaN только из колонок ФИЧ (это очистит первые 20 строк от скользящих средних)
+        df = df.dropna(subset=feature_cols)
+        
+        # Зберігаємо чистий зліпок фічей ОСТАННЬОГО відомого дня (П'ятниці) ДО зсуву таргета
+        latest_features = df[feature_cols].tail(1).copy()
+        current_price = latest_features['Close'].values[0]
+         
+        # Створюємо таргет (Ціна закриття наступного дня)
+        df['Target'] = df['Close'].shift(-1)
+
+        # Видаляємо NaN тільки з колонки Target (це коректно прибере п'ятницю з матриці навчання)
+        df = df.dropna(subset=['Target'])
+        
+        if df.empty:
+            print(f"❌ Недостатньо даних після створення індикаторів для {ticker}.")
+            continue
  
         # Спліт на Train/Test (Останні 20 днів для валідації метрик)
         train_df = df.iloc[:-20]
