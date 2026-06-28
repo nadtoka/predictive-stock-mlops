@@ -105,11 +105,20 @@ def train_and_upload():
         # Запобігаємо діленню на нуль, якщо ринок стоїть на місці
         rs = gain / loss.replace(0, 1e-9) 
         df['RSI_14'] = 100 - (100 / (1 + rs))
+        
+        # Сначала удаляем NaN только из колонок ФИЧ (это очистит первые 20 строк от скользящих средних)
+        df = df.dropna(subset=feature_cols)
+        
+        # Переносим сбор СВЕЖАЙШИХ фичей (пятницы) СЮДА — до сдвига таргета!
+        latest_features = df[feature_cols].tail(1).copy()
+        current_price = latest_features['Close'].values[0]
 
-        # Створюємо таргет (Ціна закриття наступного дня)
+        # Теперь создаем Target для обучения
         df['Target'] = df['Close'].shift(-1)
-        # Чистимо NaN, які утворилися через rolling, pct_change та shift
-        df = df.dropna()
+        
+        # Удаляем НАЙДЕННЫЙ NaN только из целевой переменной (это корректно удалит пятницу ИЗ ОБУЧАЮЩЕЙ выборки)
+        df = df.dropna(subset=['Target'])
+
         
         if df.empty:
             print(f"❌ Недостатньо даних після створення індикаторів для {ticker}.")
