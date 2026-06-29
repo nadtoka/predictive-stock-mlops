@@ -108,8 +108,9 @@ def run_inference(ticker):
         latest_features = prepare_features_for_prediction(ticker)
         current_price = latest_features["Close"].values[0]
 
-        # 4. Робимо прогноз
-        tomorrow_prediction = model.predict(latest_features)[0]
+        # 4. Робимо прогноз і перетворюємо відсоток у USD
+        predicted_return = model.predict(latest_features)[0]
+        tomorrow_prediction = current_price * (1 + predicted_return)
 
         # 5. Виводимо результат
         print(f"🔮 === ПРОГНОЗ ВІД ШІ ===")

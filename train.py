@@ -130,8 +130,8 @@ def train_and_upload():
         latest_features = df[feature_cols].tail(1).copy()
         current_price = latest_features['Close'].values[0]
          
-        # Створюємо таргет (Ціна закриття наступного дня)
-        df['Target'] = df['Close'].shift(-1)
+        # Створюємо таргет як відсоткову зміну ціни наступного дня
+        df['Target'] = df['Close'].pct_change(fill_method=None).shift(-1)
 
         # Видаляємо NaN тільки з колонки Target (це коректно прибере п'ятницю з матриці навчання)
         df = df.dropna(subset=['Target'])
@@ -161,11 +161,11 @@ def train_and_upload():
         # Валідація
         predictions = model.predict(X_test)
         mae = mean_absolute_error(y_test, predictions)
+        mae_pct = mae * 100
         
-        # Отримуємо фічі за СЬОГОДНІ для реального прогнозу на ЗАВТРА
-        # latest_features = df[feature_cols].tail(1)
-        # current_price = latest_features['Close'].values[0]
-        tomorrow_prediction = model.predict(latest_features)[0]
+        # Отримуємо прогнозований відсоток зміни та перетворюємо його на USD
+        predicted_return = model.predict(latest_features)[0]
+        tomorrow_prediction = current_price * (1 + predicted_return)
         
         # Зберігаємо ваги індивідуальної моделі
         model_path = f"models/{ticker}_model.joblib"
@@ -177,7 +177,7 @@ def train_and_upload():
         tg_report += f"🔹 *{ticker}*:\n"
         tg_report += f"  • Поточна ціна: `${current_price:.2f}`\n"
         tg_report += f"  • Прогноз на завтра: `${tomorrow_prediction:.2f}` {trend_emoji}\n"
-        tg_report += f"  • Похибка моделі (MAE): `${mae:.2f}`\n\n"
+        tg_report += f"  • Похибка моделі (MAE): `{mae_pct:.2f}%`\n\n"
 
     # Спроба синхронізації з Hugging Face Model Registry
     if hf_token and hf_model_repo and successful_models > 0:
