@@ -1,78 +1,82 @@
 # Predictive Stock MLOps Project 🚀 (v2.0)
 
-Енд-ту-енд (End-to-End) MLOps проєкт для автоматизованого збору фінансових даних, щоденного перетренування прогнозних моделей (Continuous Training) під кожен актив окремо, версіонування артефактів у Hugging Face Hub та автоматичного моніторингу через Telegram. 
-
-У версії 2.0 система повністю перейшла на патерн Multi-Output Regression, дозволяючи однією моделлю одночасно прогнозувати два часових горизонти, а також отримала гібридний зір, що об'єднує технічний та корпоративний фундаментальний аналіз.
+🌐 **Language / Мова:** [English] | [🇺🇦 Українська](README.uk.md)
 
 ---
 
-## 🏗️ Архітектура та ML-Пайплайн (Lifecycle)
+An end-to-end MLOps project for automated financial data ingestion, daily model retraining (Continuous Training) optimized for each individual asset, artifact versioning in the Hugging Face Hub, and automated operational monitoring via Telegram.
 
-Проєкт реалізує повністю автоматизований, стійкий до помилок життєвий цикл ШІ, розділений на три незалежні інфраструктурні модулі:
-
-1. Data Ingestion Engine (fetch_data.py):
-   * Щоночі викачує актуальне 5-річне ковзне вікно (5-year Rolling Window) історичних котирувань через Yahoo Finance API для цільового списку акцій.
-   * Макро-контекст: Паралельно викачує глобальні ринкові індикатори: головний індекс американської економіки S&P 500 (^GSPC) та індекс страху Волл-стріт CBOE Volatility Index (^VIX).
-   * Автоматично синхронізує та версіонує сирі дані (.csv) у Hugging Face Datasets портфоліо.
-
-2. Continuous Training Engine (train.py):
-   * Запускається щоночі через системний Cron на ізольованій Runner-VM (Proxmox / Docker Swarm).
-   * Fail-Safe Time Alignment: Примусово конвертує індекси всіх джерел у єдиний формат UTC та нормалізує їх через .normalize(), запобігаючи утворенню NaN при злитті таблиць.
-   * Глибокий Feature Engineering (Матриця з 16 ознак): Система динамічно збирає технічні, календарні, макроекономічні та фундаментальні фактори.
-   * Multi-Output Навчання: Навчений RandomForestRegressor (200 дерев рішень, max_depth=12) працює в режимі багатоцільової регресії. Модель вчиться на відсоткових доходностях (pct_change) і за один прохід прогнозує вектор із двох значень: рух на 1 день наперед (завтра) та кумулятивний рух на 5 днів наперед (робочий тиждень).
-   * Двовалютна валідація: Розраховує похибку моделі (MAE) для обох горизонтів окремо, переводячи відсотки помилки в реальні долари (USD) від поточної ціни активу.
-   * Автоматично пушить готові бінарники у Hugging Face Model Registry та надсилає компактний Markdown-звіт у Telegram.
-
-3. Public Client Inference (predict.py):
-   * Легковажний скрипт для кінцевих користувачів або сторонніх сервісів (on-demand інференс).
-   * Працює без токенів: стягує останні зафіксовані ваги моделей з Hugging Face Hub, локально прораховує аналогічний математичний граф фіч для поточної дати за останні 2 роки історії (period="2y") і миттєво виводить подвійний прогноз у консоль.
+In version **2.0**, the system has fully migrated to a **Multi-Output Regression** pattern, enabling a single model to simultaneously forecast two distinct time horizons. It also features a hybrid intelligence system combining deep technical analysis with corporate fundamentals.
 
 ---
 
-## 📊 Матриця вхідних ознак (16 Feature Columns)
+## 🏗️ Architecture & ML Pipeline (Lifecycle)
 
-Для ухвалення рішень модель використовує збалансований стек ознак:
+The project implements a fully automated, fault-tolerant AI lifecycle divided into three independent infrastructure modules:
 
-| Категорія | Назва фічі | Опис індикатора |
+### 1. Data Ingestion Engine (`fetch_data.py`)
+* Nightly fetches a **5-year rolling window** of historical market data via the Yahoo Finance API for a target list of equities.
+* **Macro Context:** Concurrently ingests global market indicators: the benchmark US economic index **S&P 500 (`^GSPC`)** and the Wall Street fear index **CBOE Volatility Index (`^VIX`)**.
+* Automatically synchronizes and versions raw datasets (`.csv`) in the **Hugging Face Datasets** registry.
+
+### 2. Continuous Training Engine (`train.py`)
+* Triggers nightly via system Cron on an isolated Runner-VM (Proxmox / Docker Swarm).
+* **Fail-Safe Time Alignment:** Enforces explicit conversion of all indices to `UTC` and normalizes them to pure midnight using `.normalize()`, eliminating `NaN` anomalies during feature merging.
+* **Deep Feature Engineering (16-Feature Matrix):** Dynamically constructs technical, calendar, macroeconomic, and fundamental data points.
+* **Multi-Output Training:** The trained `RandomForestRegressor` (200 decision trees, `max_depth=12`) operates as a multi-objective regressor. Training on relative percentage returns (`pct_change`), it predicts a vector of two values in a single forward pass: market movement for **1 day ahead (tomorrow)** and cumulative movement for **5 days ahead (trading week)**.
+* **Dual-Currency Validation:** Computes the model's Mean Absolute Error (MAE) for both horizons independently, converting percentage metrics into real USD value based on the asset's current price.
+* Automatically pushes serialized model binaries into the **Hugging Face Model Registry** and dispatches a compact Markdown digest to **Telegram**.
+
+### 3. Public Client Inference (`predict.py`)
+* A lightweight script for end-users or external integrations (on-demand inference).
+* Operates token-free: streams the latest verified model weights directly from the Hugging Face Hub, builds the corresponding feature graph locally for the current date using a 2-year lookback window (`period="2y"`), and instantly outputs the dual forecast to the console.
+
+---
+
+## 📊 Input Feature Matrix (16 Feature Columns)
+
+The model utilizes a balanced blend of distinct feature categories:
+
+| Category | Feature Name | Indicator Description |
 | :--- | :--- | :--- |
-| Технічні базові | Close, Volume | Поточна ціна закриття та об'єм торгів |
-|  | MA_5, MA_20 | Короткострокові ковзні середні (тиждень та місяць) |
-|  | Daily_Return, Volatility_5 | Добова доходність та рівень нервозності ринку за 5 днів |
-| Структура сесії | Intraday_Return, Day_Range | Рух ціни всередині сесії та амплітуда (High/Low) торгів |
-|  | Gap | Розмір нічного стрибка ціни (розрив відкриття) |
-| Календарні | Day_of_Week | День тижня для врахування «п'ятничних фіксацій» прибутку |
-| Об'єми торгів | Volume_Ratio | Сплекс торгів (поточний об'єм відносно 15-денного середнього) |
-| Макро-контекст | SP500_Return, VIX_Close | Доходність індексу S&P 500 та рівень паніки Волл-стріт |
-| Моментум | RSI_14 | Індекс відносної сили для детекції зон перегріву |
-|  | Distance_to_MA200 | Відстань ціни від глобального річного тренду (200-денна середня) |
-| Фундаментал | Earnings_Season | Прапорець сезону квартальних звітів корпорацій (1, 4, 7, 10 місяці) |
-|  | PE_Ratio, PS_Ratio | Динамічні щоденні коефіцієнти Price-to-Earnings та Price-to-Sales |
-|  | Revenue_Growth | Швидкість масштабування бізнесу за останніми даними компанії |
+| **Core Technicals** | `Close`, `Volume` | Current closing price and trading volume |
+| | `MA_5`, `MA_20` | Short-term moving averages (weekly and monthly trends) |
+| | `Daily_Return`, `Volatility_5` | Daily percentage return and historical volatility over 5 days |
+| **Session Structure** | `Intraday_Return`, `Day_Range` | Intra-session price movement and trading amplitude (High/Low) |
+| | `Gap` | Nightly price gap (opening price dislocation) |
+| **Calendar-Based** | `Day_of_Week` | Day of the week index to capture "Friday profit-taking" patterns |
+| **Volume Analytics**| `Volume_Ratio` | Volume spike tracking (current volume vs. 15-day average) |
+| **Macro Context** | `SP500_Return`, `VIX_Close` | Benchmark S&P 500 returns and Wall Street implied volatility index |
+| **Momentum** | `RSI_14` | Relative Strength Index to identify overbought/oversold regions |
+| | `Distance_to_MA200` | Price deviation from the global long-term trend (200-day SMA) |
+| **Fundamentals** | `Earnings_Season` | Corporate earnings season flag (active during Jan, Apr, Jul, Oct) |
+| | `PE_Ratio`, `PS_Ratio` | Dynamic daily Price-to-Earnings and Price-to-Sales multipliers |
+| | `Revenue_Growth` | Business scaling speed based on the latest quarterly reports |
 
 ---
 
-## 🔧 Конфігурація та змінні оточення
+## 🔧 Configuration & Environment Variables
 
-Система є повністю stateless і гнучко масштабується без необхідності перезбірки Docker-образу:
+The core pipeline is completely stateless and scales seamlessly without rebuilding the Docker image:
 
-* STOCK_TICKER — список тікерів через кому (наприклад: NVDA,GOOG,AAPL,MSFT,ASML,TSM).
-* HF_TOKEN — токен доступу до Hugging Face з правами Write.
-* HF_REPO — репозиторій датасетів (username/predictive-stock-dataset).
-* HF_MODEL_REPO — репозиторій моделей (username/predictive-stock-models).
-* TELEGRAM_BOT_TOKEN — токен твого бота від @BotFather.
-* TELEGRAM_CHAT_ID — твій особистий ID чату.
+* `STOCK_TICKER` — Comma-separated list of target equities (e.g., `NVDA,GOOG,AAPL,MSFT,ASML,TSM`).
+* `HF_TOKEN` — Hugging Face authentication token with `Write` access.
+* `HF_REPO` — Target repository path for datasets (`username/predictive-stock-dataset`).
+* `HF_MODEL_REPO` — Target repository path for model binaries (`username/predictive-stock-models`).
+* `TELEGRAM_BOT_TOKEN` — Bot authorization token issued by `@BotFather`.
+* `TELEGRAM_CHAT_ID` — Your personal Telegram user account ID.
 
-> 💡 Відмовостійкість (Graceful Degradation):
-> * Якщо запуск відбувається без вказання токенів, скрипти виконають роботу локально та не впадуть.
-> * Якщо API Yahoo Finance поверне помилку або таймаут під час запиту фінансового інфо (stock.info), система застосує безпечний інженерний fallback, виставивши дефолтні коефіцієнти, що збереже працездатність Крону.
+> 💡 **Fault Tolerance (Graceful Degradation):**
+> * If executed without access tokens, the pipeline falls back to standalone local execution mode without crashing.
+> * If the Yahoo Finance API encounters timeouts or errors while retrieving financial structures (`stock.info`), the system applies an engineering fallback, injecting default market neutral ratios to safeguard Cron execution.
 
 ---
 
-## 🚀 Швидкий старт для розробки (Local Run)
+## 🚀 Quick Start (Local Run)
 
-### 1. Встановлення залежностей
+### 1. Environment Setup
 ```bash
-git clone https://github.com/nadtoka/predictive-stock-mlops.git
+git clone [https://github.com/nadtoka/predictive-stock-mlops.git](https://github.com/nadtoka/predictive-stock-mlops.git)
 cd predictive-stock-mlops
 
 python3 -m venv venv
@@ -80,7 +84,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Локальний запуск пайплайну
+### 2. Execute the Pipeline Locally
 ```bash
 export STOCK_TICKER="NVDA,ASML,AAPL"
 export HF_TOKEN="your_hf_write_token"
@@ -93,12 +97,14 @@ python fetch_data.py
 python train.py
 ```
 
-## 🐳 Робота з універсальним Docker-образом
+---
 
-Зібраний у CI/CD образ виконує потрібну роль залежно від переданої команди:
+## 🐳 Running with Universal Docker Image
+
+The immutable image behaves according to the execution arguments passed at runtime:
 
 ```bash
-# Щонічний автоматичний збір даних
+# Automated nightly data ingestion
 docker run --rm \
   -e STOCK_TICKER="NVDA,ASML,AAPL" \
   -e HF_TOKEN="your_token" \
@@ -106,7 +112,7 @@ docker run --rm \
   -v /opt/stock-mlops/data:/app/data \
   ghcr.io/nadtoka/predictive-stock-mlops:latest python fetch_data.py
 
-# Щонічне Multi-Output тренування та надсилання звіту в Telegram
+# Automated nightly Multi-Output training & Telegram reporting
 docker run --rm \
   -e STOCK_TICKER="NVDA,ASML,AAPL" \
   -e HF_TOKEN="your_token" \
@@ -117,22 +123,25 @@ docker run --rm \
   ghcr.io/nadtoka/predictive-stock-mlops:latest python train.py
 ```
 
-## 📁 Структура проєкту
-
-```
-predictive-stock-mlops/
-├── .github/workflows/
-│   └── docker-ci.yml       # CI/CD пайплайн (Build без кешу -> Smoke Test -> Push)
-├── data/                   # Кеш історії котирувань та індексів (ігнорується Git)
-├── models/                 # Кеш ваг моделей .joblib (ігнорується Git)
-├── Dockerfile              # Універсальна інструкція збірки імутабельного середовища
-├── fetch_data.py           # Модуль збору даних (Акції + S&P 500 + VIX)
-├── train.py                # Клієнтський Multi-Output тренер на 16 фіч
-├── predict.py              # Публічний інференс на 2 роки історії (прогноз на 1д та 5д)
-└── requirements.txt        # Фіксовані версії бібліотек
-```
 ---
 
-## Інтерфейс Telegram бота
+## 📁 Project Structure
+
+```text
+predictive-stock-mlops/
+├── .github/workflows/
+│   └── docker-ci.yml       # Automated CI/CD (Build -> Smoke Test -> Push)
+├── data/                   # Local raw historical cache (Git ignored)
+├── models/                 # Local serialized model binaries (Git ignored)
+├── Dockerfile              # Instructions for building the immutable runtime
+├── fetch_data.py           # Data Ingestion module (Equities + S&P 500 + VIX)
+├── train.py                # 16-feature assembly, Multi-Output training, dual MAE, TG engine
+├── predict.py              # Lightweight client inference (On-demand 1d and 5d forecasts)
+└── requirements.txt        # Frozen dependency tree (scikit-learn, joblib, pandas, yfinance)
+```
+
+---
+
+## Telegram Bot Interface
 
 ![Telegram Operational Report](https://github.com/user-attachments/assets/294eab36-8eba-4c4f-a4ac-627086d5a06c)
