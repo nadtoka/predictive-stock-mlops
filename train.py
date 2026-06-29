@@ -162,6 +162,7 @@ def train_and_upload():
         predictions = model.predict(X_test)
         mae = mean_absolute_error(y_test, predictions)
         mae_pct = mae * 100
+        mae_usd = current_price * mae
         
         # Отримуємо прогнозований відсоток зміни та перетворюємо його на USD
         predicted_return = model.predict(latest_features)[0]
@@ -177,7 +178,7 @@ def train_and_upload():
         tg_report += f"🔹 *{ticker}*:\n"
         tg_report += f"  • Поточна ціна: `${current_price:.2f}`\n"
         tg_report += f"  • Прогноз на завтра: `${tomorrow_prediction:.2f}` {trend_emoji}\n"
-        tg_report += f"  • Похибка моделі (MAE): `{mae_pct:.2f}%`\n\n"
+        tg_report += f"  • Похибка (MAE): `{mae_pct:.2f}%` (`${mae_usd:.2f}`)\n\n"
 
     # Спроба синхронізації з Hugging Face Model Registry
     if hf_token and hf_model_repo and successful_models > 0:
