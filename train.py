@@ -2,6 +2,7 @@ import os
 import warnings
 import joblib
 import pandas as pd
+import yfinance as yf
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 from curl_cffi import requests
@@ -57,6 +58,19 @@ def train_and_upload():
             continue
             
         print(f"🧠 Обробка та тренування моделі для {ticker}...")
+        stock = yf.Ticker(ticker)
+        info = {}
+        try:
+            info = stock.info
+        except Exception:
+            info = {}
+        eps = info.get("trailingEps")
+        eps = eps if eps not in (None, 0) else 1
+        rev_per_share = info.get("revenuePerShare")
+        rev_per_share = rev_per_share if rev_per_share not in (None, 0) else 1
+        rev_growth = info.get("revenueGrowth")
+        rev_growth = rev_growth if rev_growth not in (None, 0) else 0
+
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)        
         df.index = pd.to_datetime(df.index,utc=True).normalize()
 
@@ -101,6 +115,9 @@ def train_and_upload():
         df.loc[:, "Distance_to_MA200"] = (df["Close"] - df["MA_200"]) / df["MA_200"]
         df.loc[:, "Month"] = df.index.month
         df.loc[:, "Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
+        df.loc[:, "PE_Ratio"] = df["Close"] / eps
+        df.loc[:, "PS_Ratio"] = df["Close"] / rev_per_share
+        df.loc[:, "Revenue_Growth"] = rev_growth
 
         # ДОДАЄМО RSI
         delta = df['Close'].diff()
@@ -126,7 +143,10 @@ def train_and_upload():
             "VIX_Close",
             "RSI_14",
             "Distance_to_MA200",
-            "Earnings_Season"
+            "Earnings_Season",
+            "PE_Ratio",
+            "PS_Ratio",
+            "Revenue_Growth"
         ]
 
         # Спочатку видаляємо NaN лише з колонок фічей (це очистить перші 200 рядків від ковзних середніх)
@@ -136,11 +156,12 @@ def train_and_upload():
         latest_features = df[feature_cols].tail(1).copy()
         current_price = latest_features['Close'].values[0]
          
-        # Створюємо таргет як відсоткову зміну ціни наступного дня
-        df['Target'] = df['Close'].pct_change(fill_method=None).shift(-1)
+        # Створюємо мульти-таргети як відсоткову зміну ціни на завтра та через тиждень
+        df['Target_1d'] = df['Close'].pct_change(fill_method=None).shift(-1)
+        df['Target_5d'] = df['Close'].pct_change(periods=5, fill_method=None).shift(-5)
 
-        # Видаляємо NaN тільки з колонки Target (це коректно прибере п'ятницю з матриці навчання)
-        df = df.dropna(subset=['Target'])
+        # Видаляємо NaN тільки з колонок Target_1d і Target_5d
+        df = df.dropna(subset=['Target_1d', 'Target_5d'])
         
         if df.empty:
             print(f"❌ Недостатньо даних після створення індикаторів для {ticker}.")
@@ -150,8 +171,8 @@ def train_and_upload():
         train_df = df.iloc[:-20]
         test_df = df.iloc[-20:]
         
-        X_train, y_train = train_df[feature_cols], train_df['Target']
-        X_test, y_test = test_df[feature_cols], test_df['Target']
+        X_train, y_train = train_df[feature_cols], train_df[['Target_1d', 'Target_5d']]
+        X_test, y_test = test_df[feature_cols], test_df[['Target_1d', 'Target_5d']]
         
         # Навчання моделі
         # model = RandomForestRegressor(n_estimators=100, random_state=42)
@@ -166,13 +187,16 @@ def train_and_upload():
         
         # Валідація
         predictions = model.predict(X_test)
-        mae = mean_absolute_error(y_test, predictions)
-        mae_pct = mae * 100
-        mae_usd = current_price * mae
+        mae_1d, mae_5d = mean_absolute_error(y_test, predictions, multioutput='raw_values')
+        mae_1d_pct = mae_1d * 100
+        mae_5d_pct = mae_5d * 100
+        mae_1d_usd = current_price * mae_1d
+        mae_5d_usd = current_price * mae_5d
         
-        # Отримуємо прогнозований відсоток зміни та перетворюємо його на USD
-        predicted_return = model.predict(latest_features)[0]
-        tomorrow_prediction = current_price * (1 + predicted_return)
+        # Отримуємо прогнозовані відсотки зміни та перетворюємо їх на USD
+        preds = model.predict(latest_features)[0]
+        tomorrow_pred = current_price * (1 + preds[0])
+        week_pred = current_price * (1 + preds[1])
         
         # Зберігаємо ваги індивідуальної моделі
         model_path = f"models/{ticker}_model.joblib"
@@ -180,11 +204,9 @@ def train_and_upload():
         successful_models += 1
         
         # Додаємо блок компанії у Телеграм-звіт
-        trend_emoji = "📈" if tomorrow_prediction > current_price else "📉"
-        tg_report += f"🔹 *{ticker}*:\n"
-        tg_report += f"  • Поточна ціна: `${current_price:.2f}`\n"
-        tg_report += f"  • Прогноз на завтра: `${tomorrow_prediction:.2f}` {trend_emoji}\n"
-        tg_report += f"  • Похибка (MAE): `{mae_pct:.2f}%` (`${mae_usd:.2f}`)\n\n"
+        tg_report += f"🔹 *{ticker}* (Поточна: `${current_price:.2f}`):\n"
+        tg_report += f"  • На завтра: `${tomorrow_pred:.2f}` | MAE: `{mae_1d_pct:.2f}%` (`${mae_1d_usd:.2f}`)\n"
+        tg_report += f"  • На тиждень: `${week_pred:.2f}` | MAE: `{mae_5d_pct:.2f}%` (`${mae_5d_usd:.2f}`)\n\n"
 
     # Спроба синхронізації з Hugging Face Model Registry
     if hf_token and hf_model_repo and successful_models > 0:

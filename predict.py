@@ -14,6 +14,17 @@ def prepare_features_for_prediction(ticker):
     """Збір та підготовка свіжих ринкових даних для інференсу"""
     print(f"📡 Збір свіжих даних з Yahoo Finance для {ticker}...")
     stock = yf.Ticker(ticker)
+    info = {}
+    try:
+        info = stock.info
+    except Exception:
+        info = {}
+    eps = info.get("trailingEps")
+    eps = eps if eps not in (None, 0) else 1
+    rev_per_share = info.get("revenuePerShare")
+    rev_per_share = rev_per_share if rev_per_share not in (None, 0) else 1
+    rev_growth = info.get("revenueGrowth")
+    rev_growth = rev_growth if rev_growth not in (None, 0) else 0
 
     # 2 роки історії для гарантованого прорахунку MA_200
     df = stock.history(period="2y")
@@ -60,6 +71,9 @@ def prepare_features_for_prediction(ticker):
     df.loc[:, "Distance_to_MA200"] = (df["Close"] - df["MA_200"]) / df["MA_200"]
     df.loc[:, "Month"] = df.index.month
     df.loc[:, "Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
+    df.loc[:, "PE_Ratio"] = df["Close"] / eps
+    df.loc[:, "PS_Ratio"] = df["Close"] / rev_per_share
+    df.loc[:, "Revenue_Growth"] = rev_growth
 
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -91,6 +105,9 @@ def prepare_features_for_prediction(ticker):
         "RSI_14",
         "Distance_to_MA200",
         "Earnings_Season",
+        "PE_Ratio",
+        "PS_Ratio",
+        "Revenue_Growth",
     ]
     return df_latest[feature_cols].tail(1)
 
@@ -114,15 +131,17 @@ def run_inference(ticker):
         latest_features = prepare_features_for_prediction(ticker)
         current_price = latest_features["Close"].values[0]
 
-        # 4. Робимо прогноз і перетворюємо відсоток у USD
-        predicted_return = model.predict(latest_features)[0]
-        tomorrow_prediction = current_price * (1 + predicted_return)
+        # 4. Робимо прогноз і перетворюємо відсотки у USD
+        preds = model.predict(latest_features)[0]
+        tomorrow_pred = current_price * (1 + preds[0])
+        week_pred = current_price * (1 + preds[1])
 
         # 5. Виводимо результат
         print(f"🔮 === ПРОГНОЗ ВІД ШІ ===")
         print(f"   📊 Тікер: {ticker}")
         print(f"   📈 Поточна ціна на ринку: ${current_price:.2f}")
-        print(f"   🚀 Прогноз ціни на завтра: ${tomorrow_prediction:.2f}")
+        print(f"   🚀 Прогноз ціни на завтра: ${tomorrow_pred:.2f}")
+        print(f"   📅 Прогноз ціни через тиждень: ${week_pred:.2f}")
 
     except Exception as e:
         print(f"❌ Сталася помилка під час інференсу для {ticker}: {e}")
