@@ -97,6 +97,10 @@ def train_and_upload():
         df['Day_of_Week'] = df.index.dayofweek  # Понеділок = 0, П'ятниця = 4
         df['Volume_MA15'] = df['Volume'].rolling(window=15).mean() # Середня палата об'єму за 15 днів
         df['Volume_Ratio'] = df['Volume'] / df['Volume_MA15']     # Сплеск торгів (у скільки разів більший за норму)
+        df.loc[:, "MA_200"] = df["Close"].rolling(window=200).mean()
+        df.loc[:, "Distance_to_MA200"] = (df["Close"] - df["MA_200"]) / df["MA_200"]
+        df.loc[:, "Month"] = df.index.month
+        df.loc[:, "Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
 
         # ДОДАЄМО RSI
         delta = df['Close'].diff()
@@ -120,10 +124,12 @@ def train_and_upload():
             "Volume_Ratio",
             "SP500_Return",
             "VIX_Close",
-            "RSI_14"
+            "RSI_14",
+            "Distance_to_MA200",
+            "Earnings_Season"
         ]
- 
-        # Сначала удаляем NaN только из колонок ФИЧ (это очистит первые 20 строк от скользящих средних)
+
+        # Спочатку видаляємо NaN лише з колонок фічей (це очистить перші 200 рядків від ковзних середніх)
         df = df.dropna(subset=feature_cols)
         
         # Зберігаємо чистий зліпок фічей ОСТАННЬОГО відомого дня (П'ятниці) ДО зсуву таргета

@@ -15,8 +15,8 @@ def prepare_features_for_prediction(ticker):
     print(f"📡 Збір свіжих даних з Yahoo Finance для {ticker}...")
     stock = yf.Ticker(ticker)
 
-    # 3 місяці історії для гарантованого прорахунку MA_20
-    df = stock.history(period="3mo")
+    # 2 роки історії для гарантованого прорахунку MA_200
+    df = stock.history(period="2y")
 
     if df.empty:
         raise ValueError(f"Не вдалося отримати дані для {ticker}")
@@ -25,8 +25,8 @@ def prepare_features_for_prediction(ticker):
     sp500 = yf.Ticker("^GSPC")
     vix = yf.Ticker("^VIX")
 
-    sp500_df = sp500.history(period="3mo")
-    vix_df = vix.history(period="3mo")
+    sp500_df = sp500.history(period="2y")
+    vix_df = vix.history(period="2y")
 
     if sp500_df.empty:
         raise ValueError("Не вдалося отримати дані S&P 500 для інференсу")
@@ -56,6 +56,10 @@ def prepare_features_for_prediction(ticker):
     df.loc[:, "Day_of_Week"] = df.index.dayofweek
     df.loc[:, "Volume_MA15"] = df["Volume"].rolling(window=15).mean()
     df.loc[:, "Volume_Ratio"] = df["Volume"] / df["Volume_MA15"]
+    df.loc[:, "MA_200"] = df["Close"].rolling(window=200).mean()
+    df.loc[:, "Distance_to_MA200"] = (df["Close"] - df["MA_200"]) / df["MA_200"]
+    df.loc[:, "Month"] = df.index.month
+    df.loc[:, "Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
 
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -85,6 +89,8 @@ def prepare_features_for_prediction(ticker):
         "SP500_Return",
         "VIX_Close",
         "RSI_14",
+        "Distance_to_MA200",
+        "Earnings_Season",
     ]
     return df_latest[feature_cols].tail(1)
 
