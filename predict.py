@@ -21,12 +21,47 @@ def prepare_features_for_prediction(ticker):
     if df.empty:
         raise ValueError(f"Не вдалося отримати дані для {ticker}")
 
+    # Завантажуємо макро-індикатори, як у train.py
+    sp500 = yf.Ticker("^GSPC")
+    vix = yf.Ticker("^VIX")
+
+    sp500_df = sp500.history(period="3mo")
+    vix_df = vix.history(period="3mo")
+
+    if sp500_df.empty:
+        raise ValueError("Не вдалося отримати дані S&P 500 для інференсу")
+    if vix_df.empty:
+        raise ValueError("Не вдалося отримати дані VIX для інференсу")
+
     df = df.copy()
-    # Створюємо фічі
+    df.index = pd.to_datetime(df.index, utc=True).normalize()
+    sp500_df.index = pd.to_datetime(sp500_df.index, utc=True).normalize()
+    vix_df.index = pd.to_datetime(vix_df.index, utc=True).normalize()
+
+    sp500_df["SP500_Return"] = sp500_df["Close"].pct_change(fill_method=None)
+    vix_df["VIX_Close"] = vix_df["Close"]
+
+    # Приєднуємо макро-фічі до основної таблиці за датою
+    df = df.join(sp500_df[["SP500_Return"]], how="left")
+    df = df.join(vix_df[["VIX_Close"]], how="left")
+
+    # Створюємо фічі, максимально наближені до тієї самої матриці, що в train.py
     df.loc[:, "MA_5"] = df["Close"].rolling(window=5).mean()
     df.loc[:, "MA_20"] = df["Close"].rolling(window=20).mean()
     df.loc[:, "Daily_Return"] = df["Close"].pct_change(fill_method=None)
     df.loc[:, "Volatility_5"] = df["Daily_Return"].rolling(window=5).std()
+    df.loc[:, "Intraday_Return"] = (df["Close"] - df["Open"]) / df["Open"]
+    df.loc[:, "Day_Range"] = (df["High"] - df["Low"]) / df["Low"]
+    df.loc[:, "Gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
+    df.loc[:, "Day_of_Week"] = df.index.dayofweek
+    df.loc[:, "Volume_MA15"] = df["Volume"].rolling(window=15).mean()
+    df.loc[:, "Volume_Ratio"] = df["Volume"] / df["Volume_MA15"]
+
+    delta = df["Close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    df.loc[:, "RSI_14"] = 100 - (100 / (1 + rs))
 
     df_latest = df.dropna()
 
@@ -42,6 +77,14 @@ def prepare_features_for_prediction(ticker):
         "MA_20",
         "Daily_Return",
         "Volatility_5",
+        "Intraday_Return",
+        "Day_Range",
+        "Gap",
+        "Day_of_Week",
+        "Volume_Ratio",
+        "SP500_Return",
+        "VIX_Close",
+        "RSI_14",
     ]
     return df_latest[feature_cols].tail(1)
 
