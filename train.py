@@ -46,7 +46,7 @@ def train_and_upload():
     os.makedirs("models", exist_ok=True)
     
     # Заголовок нашого щонічного звіту
-    tg_report = "📊 *ЩОНІЧНИЙ MLOps ЗВІТ ШІ*\n"
+    tg_report = "📊 КВАНТОВИЙ АНАЛІЗ РИНКУ\n"
     tg_report += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
     successful_models = 0
@@ -218,9 +218,9 @@ def train_and_upload():
         emoji_5d = "🚀" if week_pred > current_price else "📉"
 
         # Додаємо блок компанії у Телеграм-звіт
-        tg_report += f"🔹 *{ticker}* (Поточна: `${current_price:.2f}`):\n"
-        tg_report += f"  • {day_1d_text} {emoji_1d}: `${tomorrow_pred:.2f}` | MAE: `{mae_1d_pct:.2f}%` (`${mae_1d_usd:.2f}`)\n"
-        tg_report += f"  • {day_5d_text} {emoji_5d}: `${week_pred:.2f}` | MAE: `{mae_5d_pct:.2f}%` (`${mae_5d_usd:.2f}`)\n\n"
+        tg_report += f"🔹 *{ticker}* (Поточна: ${current_price:.2f}):\n"
+        tg_report += f"  • {day_1d_text} {emoji_1d}: ${tomorrow_pred:.2f} | MAE: {mae_1d_pct:.2f}% (${mae_1d_usd:.2f})\n"
+        tg_report += f"  • {day_5d_text} {emoji_5d}: ${week_pred:.2f} | MAE: {mae_5d_pct:.2f}% (${mae_5d_usd:.2f})\n\n"
 
     # Спроба синхронізації з Hugging Face Model Registry
     if hf_token and hf_model_repo and successful_models > 0:
