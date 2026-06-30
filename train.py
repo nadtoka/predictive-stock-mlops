@@ -49,6 +49,7 @@ def train_and_upload():
     tg_report = "📊 КВАНТОВИЙ АНАЛІЗ РИНКУ\n"
     tg_report += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
+    daily_predictions = []
     successful_models = 0
 
     for ticker in tickers:
@@ -213,6 +214,14 @@ def train_and_upload():
         day_1d_text = f"{ua_days[date_1d.weekday()]} ({date_1d.strftime('%d.%m')})"
         day_5d_text = f"{ua_days[date_5d.weekday()]} ({date_5d.strftime('%d.%m')})"
 
+        daily_predictions.append({
+            "date": last_date.strftime('%Y-%m-%d'),
+            "ticker": ticker,
+            "current_price": float(current_price),
+            "pred_1d": float(tomorrow_pred),
+            "pred_5d": float(week_pred),
+        })
+
         # 📊 Розрахунок емодзі трендів відносно поточної ціни
         emoji_1d = "📈" if tomorrow_pred > current_price else "📉"
         emoji_5d = "🚀" if week_pred > current_price else "📉"
@@ -241,6 +250,41 @@ def train_and_upload():
 
     # Відправляємо фінальний зібраний звіт в телеграм
     send_telegram_report(tg_report)
+
+    # 🚀 v3.0 Блок: Безпечне збереження історії прогнозів
+    import os
+    hf_repo_inside = os.getenv("HF_REPO")
+
+    if hf_token and hf_repo_inside and daily_predictions:
+        try:
+            print("💾 Синхронізація історії прогнозів з Hugging Face...")
+            from huggingface_hub import HfApi
+            
+            api = HfApi()
+            file_path = "predictions_history.csv"
+            remote_url = f"https://huggingface.co/datasets/{hf_repo_inside}/raw/main/{file_path}"
+            
+            try:
+                df_history = pd.read_csv(remote_url)
+                print("📜 Знайдено існуючу історію прогнозів. Оновлюємо...")
+            except Exception:
+                df_history = pd.DataFrame(columns=["date", "ticker", "current_price", "pred_1d", "pred_5d"])
+                print("✨ Створюємо новий файл історії прогнозів...")
+            
+            df_new = pd.DataFrame(daily_predictions)
+            df_combined = pd.concat([df_history, df_new], ignore_index=True)
+            
+            csv_data = df_combined.to_csv(index=False)
+            api.upload_file(
+                path_or_fileobj=csv_data.encode("utf-8"),
+                path_in_repo=file_path,
+                repo_id=hf_repo_inside,
+                repo_type="dataset",
+                token=hf_token
+            )
+            print("✅ Історію прогнозів успішно засинкронено в Hugging Face!")
+        except Exception as e:
+            print(f"⚠️ Не вдалося зберегти історію прогнозів на HF (але пайплайн продовжує роботу): {e}")
 
 if __name__ == "__main__":
     train_and_upload()
