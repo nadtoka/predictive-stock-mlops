@@ -137,4 +137,4 @@ predictive-stock-mlops/
 
 ## Інтерфейс Telegram бота
 
-![Telegram Operational Report](https://github.com/user-attachments/assets/294eab36-8eba-4c4f-a4ac-627086d5a06c)
+![Telegram Operational Report](https://github.com/user-attachments/assets/ff329bf4-1e32-4291-b358-413924483988)
