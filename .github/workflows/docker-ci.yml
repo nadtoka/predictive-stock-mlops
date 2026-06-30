@@ -67,6 +67,7 @@ jobs:
         docker run --rm \
           -e STOCK_TICKER="$TARGET_TICKERS" \
           -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
+          -e HF_REPO="nadtoka/predictive-stock-dataset" \
           -e HF_MODEL_REPO="nadtoka/predictive-stock-models" \
           -v $(pwd)/test_data:/app/data \
           -v $(pwd)/test_models:/app/models \
