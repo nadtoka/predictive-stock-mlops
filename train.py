@@ -203,10 +203,24 @@ def train_and_upload():
         joblib.dump(model, model_path)
         successful_models += 1
         
+        # 🚀 UX-Апдейт: Динамічні дати для звіту (беремо з safe-копії до dropna)
+        last_date = latest_features.index[-1]
+        ua_days = {0: "Понеділок", 1: "Вівторок", 2: "Середа", 3: "Четвер", 4: "П'ятниця", 5: "Субота", 6: "Неділя"}
+
+        date_1d = last_date + pd.offsets.BusinessDay(1)
+        date_5d = last_date + pd.offsets.BusinessDay(5)
+
+        day_1d_text = f"{ua_days[date_1d.weekday()]} ({date_1d.strftime('%d.%m')})"
+        day_5d_text = f"{ua_days[date_5d.weekday()]} ({date_5d.strftime('%d.%m')})"
+
+        # 📊 Розрахунок емодзі трендів відносно поточної ціни
+        emoji_1d = "📈" if tomorrow_pred > current_price else "📉"
+        emoji_5d = "🚀" if week_pred > current_price else "📉"
+
         # Додаємо блок компанії у Телеграм-звіт
         tg_report += f"🔹 *{ticker}* (Поточна: `${current_price:.2f}`):\n"
-        tg_report += f"  • На завтра: `${tomorrow_pred:.2f}` | MAE: `{mae_1d_pct:.2f}%` (`${mae_1d_usd:.2f}`)\n"
-        tg_report += f"  • На тиждень: `${week_pred:.2f}` | MAE: `{mae_5d_pct:.2f}%` (`${mae_5d_usd:.2f}`)\n\n"
+        tg_report += f"  • {day_1d_text} {emoji_1d}: `${tomorrow_pred:.2f}` | MAE: `{mae_1d_pct:.2f}%` (`${mae_1d_usd:.2f}`)\n"
+        tg_report += f"  • {day_5d_text} {emoji_5d}: `${week_pred:.2f}` | MAE: `{mae_5d_pct:.2f}%` (`${mae_5d_usd:.2f}`)\n\n"
 
     # Спроба синхронізації з Hugging Face Model Registry
     if hf_token and hf_model_repo and successful_models > 0:

@@ -136,12 +136,25 @@ def run_inference(ticker):
         tomorrow_pred = current_price * (1 + preds[0])
         week_pred = current_price * (1 + preds[1])
 
+        # 🚀 UX-Апдейт: Динамічні дати для виводу
+        last_date = latest_features.index[-1]
+        ua_days = {0: "Понеділок", 1: "Вівторок", 2: "Середа", 3: "Четвер", 4: "П'ятниця", 5: "Субота", 6: "Неділя"}
+        
+        date_1d = last_date + pd.offsets.BusinessDay(1)
+        date_5d = last_date + pd.offsets.BusinessDay(5)
+        
+        day_1d_text = f"{ua_days[date_1d.weekday()]} ({date_1d.strftime('%d.%m')})"
+        day_5d_text = f"{ua_days[date_5d.weekday()]} ({date_5d.strftime('%d.%m')})"
+
+        emoji_1d = "📈" if tomorrow_pred > current_price else "📉"
+        emoji_5d = "🚀" if week_pred > current_price else "📉"
+
         # 5. Виводимо результат
         print(f"🔮 === ПРОГНОЗ ВІД ШІ ===")
         print(f"   📊 Тікер: {ticker}")
         print(f"   📈 Поточна ціна на ринку: ${current_price:.2f}")
-        print(f"   🚀 Прогноз ціни на завтра: ${tomorrow_pred:.2f}")
-        print(f"   📅 Прогноз ціни через тиждень: ${week_pred:.2f}")
+        print(f"   🚀 Прогноз на {day_1d_text}: ${tomorrow_pred:.2f} {emoji_1d}")
+        print(f"   📅 Прогноз на {day_5d_text}: ${week_pred:.2f} {emoji_5d}")
 
     except Exception as e:
         print(f"❌ Сталася помилка під час інференсу для {ticker}: {e}")
