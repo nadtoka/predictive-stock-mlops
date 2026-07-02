@@ -262,7 +262,6 @@ def train_and_upload():
     if hf_token and hf_repo_inside and daily_predictions:
         try:
             print("💾 Синхронізація історії прогнозів з Hugging Face...")
-            from huggingface_hub import HfApi
 
             api = HfApi()
             file_path = "predictions_history.csv"
