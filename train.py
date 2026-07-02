@@ -49,7 +49,7 @@ def train_and_upload():
 
     # Заголовок нашого щонічного звіту
     tg_report = "📊 КВАНТОВИЙ АНАЛІЗ РИНКУ\n"
-    tg_report += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    tg_report += "━━━━━━━━━━━━━━\n\n"
 
     daily_predictions = []
     successful_models = 0
