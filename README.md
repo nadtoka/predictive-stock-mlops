@@ -1,4 +1,4 @@
-# Predictive Stock MLOps Project 🚀 (v2.0)
+# Predictive Stock MLOps Project 🚀 (v3.0)
 
 🌐 **Language / Мова:** [English] | [🇺🇦 Українська](README.uk.md)
 
@@ -6,13 +6,13 @@
 
 An end-to-end MLOps project for automated financial data ingestion, daily model retraining (Continuous Training) optimized for each individual asset, artifact versioning in the Hugging Face Hub, and automated operational monitoring via Telegram.
 
-In version **2.0**, the system has fully migrated to a **Multi-Output Regression** pattern, enabling a single model to simultaneously forecast two distinct time horizons. It also features a hybrid intelligence system combining deep technical analysis with corporate fundamentals.
+In version **3.0**, the system has fully migrated to an autonomous evaluation loop (Feedback Loop), enabling not only training but also independent quality control of predictions throughout the production lifecycle.
 
 ---
 
 ## 🏗️ Architecture & ML Pipeline (Lifecycle)
 
-The project implements a fully automated, fault-tolerant AI lifecycle divided into three independent infrastructure modules:
+The project implements a fully automated, fault-tolerant AI lifecycle divided into four independent infrastructure modules:
 
 ### 1. Data Ingestion Engine (`fetch_data.py`)
 * Nightly fetches a **5-year rolling window** of historical market data via the Yahoo Finance API for a target list of equities.
@@ -27,7 +27,14 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 * **Dual-Currency Validation:** Computes the model's Mean Absolute Error (MAE) for both horizons independently, converting percentage metrics into real USD value based on the asset's current price.
 * Automatically pushes serialized model binaries into the **Hugging Face Model Registry** and dispatches a compact Markdown digest to **Telegram**.
 
-### 3. Public Client Inference (`predict.py`)
+### 3. Continuous Evaluation Engine (`evaluate.py`)
+* An autonomous system referee running nightly in a Docker container immediately after the training process.
+* Streams the prediction logs (`predictions_history.csv`) and matches them against benchmark ground truth closing prices harvested through the Yahoo Finance API.
+* Computes Mean Absolute Error (MAE in USD and percentage metrics) along with Directional Accuracy (Win Rate) for both 1d and 5d forecasting horizons.
+* Features absolute idempotency: tracks audited states via unique composite keys to prevent redundant verifications.
+* Automatically synchronizes the evaluation grid into `evaluation_history.csv` hosted in Hugging Face Datasets and fires an elastic, line-by-line chunked analytical feedback report to Telegram.
+
+### 4. Public Client Inference (`predict.py`)
 * A lightweight script for end-users or external integrations (on-demand inference).
 * Operates token-free: streams the latest verified model weights directly from the Hugging Face Hub, builds the corresponding feature graph locally for the current date using a 2-year lookback window (`period="2y"`), and instantly outputs the dual forecast to the console.
 
@@ -121,6 +128,15 @@ docker run --rm \
   -e TELEGRAM_CHAT_ID="your_tg_id" \
   -v /opt/stock-mlops/data:/app/data \
   ghcr.io/nadtoka/predictive-stock-mlops:latest python train.py
+
+# Automated nightly quality control & evaluation loop
+docker run --rm \
+  -e HF_TOKEN="your_token" \
+  -e HF_REPO="username/predictive-stock-dataset" \
+  -e TELEGRAM_BOT_TOKEN="your_tg_token" \
+  -e TELEGRAM_CHAT_ID="your_tg_id" \
+  -v /opt/stock-mlops/data:/app/data \
+  ghcr.io/nadtoka/predictive-stock-mlops:latest python evaluate.py
 ```
 
 ---
@@ -136,6 +152,7 @@ predictive-stock-mlops/
 ├── Dockerfile              # Instructions for building the immutable runtime
 ├── fetch_data.py           # Data Ingestion module (Equities + S&P 500 + VIX)
 ├── train.py                # 16-feature assembly, Multi-Output training, dual MAE, TG engine
+├── evaluate.py             # Automated model accuracy auditor, MAE % and Win Rate tracker
 ├── predict.py              # Lightweight client inference (On-demand 1d and 5d forecasts)
 └── requirements.txt        # Frozen dependency tree (scikit-learn, joblib, pandas, yfinance)
 ```
