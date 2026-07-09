@@ -9,7 +9,7 @@ from curl_cffi import requests
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 def send_telegram_report(text):
-    """Надсилає звіт в Телеграм з автоматичним розбиттям на безпечні чанки"""
+    """Надсилає звіт в Телеграм з автоматичним розбиттям на безпечні чанки за рядками"""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
@@ -18,23 +18,25 @@ def send_telegram_report(text):
         return
         
     MAX_LEN = 4000
-    if len(text) <= MAX_LEN:
-        chunks = [text]
-    else:
-        chunks = []
-        lines = text.split("\n\n")
-        current_chunk = ""
-        for line in lines:
-            if len(current_chunk) + len(line) + 2 > MAX_LEN:
-                chunks.append(current_chunk.strip())
-                current_chunk = line + "\n\n"
-            else:
-                current_chunk += line + "\n\n"
-        if current_chunk:
+    chunks = []
+    current_chunk = ""
+    
+    # Розбиваємо строго по рядках (\n) для ліквідації пастки довгих повідомлень
+    lines = text.split("\n")
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > MAX_LEN:
             chunks.append(current_chunk.strip())
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+            
+    if current_chunk:
+        chunks.append(current_chunk.strip())
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     for chunk in chunks:
+        if not chunk:
+            continue
         payload = {
             "chat_id": chat_id,
             "text": chunk,
@@ -88,7 +90,6 @@ def evaluate_predictions():
     print("📡 Завантаження реальних історичних цін закриття з yfinance...")
     for ticker in tickers:
         try:
-            # Беремо період 1 місяць, щоб гарантовано закрити 1д та 5д таргет-дати
             stock_df = yf.Ticker(ticker).history(period="1mo")
             if not stock_df.empty:
                 stock_df.index = pd.to_datetime(stock_df.index, utc=True).normalize()
@@ -126,7 +127,6 @@ def evaluate_predictions():
             mae_usd = abs(actual_close_1d - pred_1d)
             mae_pct = (mae_usd / actual_close_1d) * 100
             
-            # Напрямок руху (1 = вгору, -1 = вниз, 0 = без змін)
             actual_dir = 1 if actual_close_1d > current_price else (-1 if actual_close_1d < current_price else 0)
             pred_dir = 1 if pred_1d > current_price else (-1 if pred_1d < current_price else 0)
             is_correct = 1 if actual_dir == pred_dir else 0
@@ -173,7 +173,6 @@ def evaluate_predictions():
             })
             processed_keys.add(eval_id_5d)
 
-    # Якщо з'явилися нові закриті прогнози — формуємо репорт
     if new_evaluations:
         df_new_eval = pd.DataFrame(new_evaluations)
         df_final_eval = pd.concat([df_eval_existing, df_new_eval], ignore_index=True)
@@ -197,9 +196,8 @@ def evaluate_predictions():
                     dir_emoji = "🎯" if r["direction_correct"] == 1 else "❌"
                     tg_report += f"    {dir_emoji} *{r['ticker']}*: Факт ${r['actual_price']:.2f} | ШІ ${r['predicted_price']:.2f} (MAE: {r['mae_pct']:.2f}%)\n"
 
-        # Пушимо оновлену базу назад на Hugging Face без локальних файлів
         try:
-            print("💾 Синхронізація матриці оцінки з Hugging Face...")
+            print("💾 Синхронізаціяльної матриці оцінки з Hugging Face...")
             api = HfApi()
             csv_data = df_final_eval.to_csv(index=False)
             api.upload_file(
@@ -212,7 +210,7 @@ def evaluate_predictions():
             print("✅ Матрицю успішно засинкронено в Hugging Face Datasets!")
         except Exception as e:
             print(f"⚠️ Не вдалося зберегти базу оцінки на HF: {e}")
-            tg_report += "\n\n⚠️ *Hugging Face:* Метрики збережено лише локально (помилка синхронізації)."
+            tg_report += "\n\n⚠️ *Hugging Face:* Помилка синхронізації бази."
             
         send_telegram_report(tg_report)
     else:
