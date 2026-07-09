@@ -52,6 +52,5 @@ models/
 Thumbs.db
 
 # === Environment Variables / Secrets ===
-# Якщо з'являться API-ключі або паролі до баз даних
 .env
 .secrets
