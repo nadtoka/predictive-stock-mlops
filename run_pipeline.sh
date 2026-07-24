@@ -16,7 +16,7 @@ fi
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-STOCK_TICKER="NVDA,GOOG,AAPL,MSFT,AMZN,ASML,ADBE,TSM,V,META,BULL,AMD,NET,QBTS,RGTI,IONQ,IBM,FIG,DJT,BILL,NFLX,AVGO,QQQM,UNH,FSLY,CAT,ETN"
+STOCK_TICKER="NVDA,GOOG,AAPL,MSFT,AMZN,ASML,ADBE,TSM,V,META,BULL,AMD,NET,QBTS,RGTI,IONQ,IBM,FIG,BILL,NFLX,AVGO,QQQM,UNH,FSLY,CAT,ETN"
 HF_REPO="nadtoka/predictive-stock-dataset"
 HF_MODEL_REPO="nadtoka/predictive-stock-models"
 
