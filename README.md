@@ -1,4 +1,4 @@
-# Predictive Stock MLOps Project 🚀 (v3.0)
+# Predictive Stock MLOps Project 🚀 (v3.1)
 
 🌐 **Language / Мова:** [English] | [🇺🇦 Українська](README.uk.md)
 
@@ -6,7 +6,7 @@
 
 An end-to-end MLOps project for automated financial data ingestion, daily model retraining (Continuous Training) optimized for each individual asset, artifact versioning in the Hugging Face Hub, and automated operational monitoring via Telegram.
 
-In version **3.0**, the system has fully migrated to an autonomous evaluation loop (Feedback Loop), enabling not only training but also independent quality control of predictions throughout the production lifecycle.
+In version **v3.1**, the system introduces a Continuous Learning loop with adaptive bias correction and trust-based confidence badges, extending the autonomous evaluation flow with stronger production feedback and operational reliability.
 
 ---
 
@@ -25,6 +25,9 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 * **Deep Feature Engineering (16-Feature Matrix):** Dynamically constructs technical, calendar, macroeconomic, and fundamental data points.
 * **Multi-Output Training:** The trained `RandomForestRegressor` (200 decision trees, `max_depth=12`) operates as a multi-objective regressor. Training on relative percentage returns (`pct_change`), it predicts a vector of two values in a single forward pass: market movement for **1 day ahead (tomorrow)** and cumulative movement for **5 days ahead (trading week)**.
 * **Dual-Currency Validation:** Computes the model's Mean Absolute Error (MAE) for both horizons independently, converting percentage metrics into real USD value based on the asset's current price.
+* **Closed-Loop Integration:** At the start of each run, loads `evaluation_history.csv` from Hugging Face Datasets to incorporate retrospective error context into the next training cycle.
+* **Dynamic Bias Correction:** Automatically computes the median error shift (Bias) over the past 14 days and compensates predictions with a capped adjustment of ±3% relative to the current price.
+* **Confidence Badges & Win Rate:** Injects trust badges into the Telegram report based on the latest win-rate signal (🟢 WinRate ≥ 65%, 🟡 Moderate / limited data, 🔴 WinRate < 45%).
 * Automatically pushes serialized model binaries into the **Hugging Face Model Registry** and dispatches a compact Markdown digest to **Telegram**.
 
 ### 3. Continuous Evaluation Engine (`evaluate.py`)
@@ -83,7 +86,7 @@ The core pipeline is completely stateless and scales seamlessly without rebuildi
 
 ### 1. Environment Setup
 ```bash
-git clone [https://github.com/nadtoka/predictive-stock-mlops.git](https://github.com/nadtoka/predictive-stock-mlops.git)
+git clone https://github.com/nadtoka/predictive-stock-mlops.git
 cd predictive-stock-mlops
 
 python3 -m venv venv
@@ -132,7 +135,7 @@ docker run --rm \
 # Automated nightly quality control & evaluation loop
 docker run --rm \
   -e HF_TOKEN="your_token" \
-  -e HF_REPO="username/predictive-stock-dataset" \
+  -e HF_REPO="nadtoka/predictive-stock-dataset" \
   -e TELEGRAM_BOT_TOKEN="your_tg_token" \
   -e TELEGRAM_CHAT_ID="your_tg_id" \
   -v /opt/stock-mlops/data:/app/data \
