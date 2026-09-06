@@ -227,6 +227,14 @@ def train_and_upload():
             else:
                 df["Analyst_Score"] = 2.5
 
+            prev_close = df["Close"].shift(1)
+            tr1 = df["High"] - df["Low"]
+            tr2 = (df["High"] - prev_close).abs()
+            tr3 = (df["Low"] - prev_close).abs()
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr_14 = tr.rolling(window=14, min_periods=1).mean()
+            df["ATR_Ratio"] = (tr / atr_14.replace(0, 1e-9)).fillna(1.0)
+
             delta = df["Close"].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -237,7 +245,7 @@ def train_and_upload():
                 "Close", "Volume", "MA_5", "MA_20", "Daily_Return", "Volatility_5",
                 "Intraday_Return", "Day_Range", "Gap", "Day_of_Week", "Volume_Ratio",
                 "SP500_Return", "VIX_Close", "RSI_14", "Distance_to_MA200",
-                "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside", "PE_Expansion", "Analyst_Score",
+                "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside", "PE_Expansion", "Analyst_Score", "ATR_Ratio",
             ]
 
             df = df.dropna(subset=feature_cols)

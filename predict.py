@@ -162,6 +162,14 @@ def prepare_features_for_prediction(ticker):
     else:
         df.loc[:, "Analyst_Score"] = 2.5
 
+    prev_close = df["Close"].shift(1)
+    tr1 = df["High"] - df["Low"]
+    tr2 = (df["High"] - prev_close).abs()
+    tr3 = (df["Low"] - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    atr_14 = tr.rolling(window=14, min_periods=1).mean()
+    df.loc[:, "ATR_Ratio"] = (tr / atr_14.replace(0, 1e-9)).fillna(1.0)
+
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -191,6 +199,7 @@ def prepare_features_for_prediction(ticker):
         "Analyst_Upside",
         "PE_Expansion",
         "Analyst_Score",
+        "ATR_Ratio",
     ]
 
     df_latest = df.dropna(subset=feature_cols)
