@@ -168,6 +168,7 @@ def train_and_upload():
         rev_per_share = rev_per_share if rev_per_share not in (None, 0) else 1
         rev_growth = info.get("revenueGrowth")
         rev_growth = rev_growth if rev_growth not in (None, 0) else 0
+        target_mean_price = info.get("targetMeanPrice")
 
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)
         if len(df) < 40:
@@ -213,6 +214,10 @@ def train_and_upload():
         df.loc[:, "PE_Ratio"] = df["Close"] / eps
         df.loc[:, "PS_Ratio"] = df["Close"] / rev_per_share
         df.loc[:, "Revenue_Growth"] = rev_growth
+        if target_mean_price is not None and target_mean_price > 0:
+            df["Analyst_Upside"] = (target_mean_price - df["Close"]) / df["Close"]
+        else:
+            df["Analyst_Upside"] = 0.0
 
         # RSI
         delta = df["Close"].diff()
@@ -225,7 +230,7 @@ def train_and_upload():
             "Close", "Volume", "MA_5", "MA_20", "Daily_Return", "Volatility_5",
             "Intraday_Return", "Day_Range", "Gap", "Day_of_Week", "Volume_Ratio",
             "SP500_Return", "VIX_Close", "RSI_14", "Distance_to_MA200",
-            "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth",
+            "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside",
         ]
 
         df = df.dropna(subset=feature_cols)
