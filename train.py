@@ -40,8 +40,8 @@ def send_telegram_report(text):
 
 def calculate_ticker_metrics(df_eval, current_ticker):
     """
-    Розрахунок метрик для тікера на основі останніх 14 календарних днів
-    (або останніх 10 закритих рядків, якщо записів мало).
+    Розрахунок метрик для тікера на основі останніх 14 календарних днів.
+    Якщо в вікні менше 5 свіжих оцінок — не підтягуємо хвіст, а повертаємо нульовий bias.
     """
     metrics = {
         "1d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
@@ -66,31 +66,37 @@ def calculate_ticker_metrics(df_eval, current_ticker):
         df_h = df_h.sort_values("target_date")
         df_recent = df_h[df_h["target_date"] >= cutoff_date]
 
-        if len(df_recent) < 10:
-            df_recent = df_h.tail(10)
-
-        if not df_recent.empty:
-            count = len(df_recent)
-            win_rate = 50.0
-            if "direction_correct" in df_recent.columns and not df_recent["direction_correct"].dropna().empty:
-                win_rate = float(df_recent["direction_correct"].mean() * 100)
-
-            bias = 0.0
-            if "actual_price" in df_recent.columns and "predicted_price" in df_recent.columns:
-                diff = df_recent["actual_price"] - df_recent["predicted_price"]
-                if not diff.dropna().empty:
-                    bias = float(diff.median())
-
-            if pd.isna(win_rate):
-                win_rate = 50.0
-            if pd.isna(bias):
-                bias = 0.0
-
+        # Мінімум для включення в динамічну компенсацію — 5 свіжих оцінок.
+        # Не "доповнюємо" вибірку хвостом, якщо даних недостатньо: це знижує якість сигналу.
+        if len(df_recent) < 5:
             metrics[horizon] = {
-                "win_rate": win_rate,
-                "bias": bias,
-                "count": count,
+                "win_rate": 50.0,
+                "bias": 0.0,
+                "count": int(len(df_recent)),
             }
+            continue
+
+        count = len(df_recent)
+        win_rate = 50.0
+        if "direction_correct" in df_recent.columns and not df_recent["direction_correct"].dropna().empty:
+            win_rate = float(df_recent["direction_correct"].mean() * 100)
+
+        bias = 0.0
+        if "actual_price" in df_recent.columns and "predicted_price" in df_recent.columns:
+            diff = df_recent["actual_price"] - df_recent["predicted_price"]
+            if not diff.dropna().empty:
+                bias = float(diff.median())
+
+        if pd.isna(win_rate):
+            win_rate = 50.0
+        if pd.isna(bias):
+            bias = 0.0
+
+        metrics[horizon] = {
+            "win_rate": win_rate,
+            "bias": bias,
+            "count": count,
+        }
 
     return metrics
 
@@ -242,19 +248,33 @@ def train_and_upload():
         bias_1d = ticker_metrics["1d"]["bias"]
         bias_5d = ticker_metrics["5d"]["bias"]
         count_1d = ticker_metrics["1d"]["count"]
+        count_5d = ticker_metrics["5d"]["count"]
         win_rate_1d = ticker_metrics["1d"]["win_rate"]
 
-        # Додаємо компенсацію, якщо є хоча б 3 закриті оцінки
-        if count_1d >= 3:
-            cap_limit = 0.03 * current_price  # Захисний ліміт ±3%
-            capped_bias_1d = max(-cap_limit, min(bias_1d, cap_limit))
-            capped_bias_5d = max(-cap_limit, min(bias_5d, cap_limit))
+        damping_factor = 0.2
+        vix_current = float(df["VIX_Close"].iloc[-1]) if "VIX_Close" in df.columns and not df["VIX_Close"].dropna().empty else 15.0
 
+        capped_bias_1d = 0.0
+        capped_bias_5d = 0.0
+
+        # 1d: компенсація лише при >= 5 свіжих оцінок, з демпфінгом 20% і капом ±0.5%
+        if count_1d >= 5:
+            cap_limit_1d = 0.005 * current_price
+            capped_bias_1d = max(-cap_limit_1d, min(bias_1d * damping_factor, cap_limit_1d))
+            if vix_current > 22:
+                capped_bias_1d = 0.0
             tomorrow_pred += capped_bias_1d
+
+        # 5d: компенсація лише при >= 5 свіжих оцінок, з демпфінгом 20% і капом ±1.5%
+        if count_5d >= 5:
+            cap_limit_5d = 0.015 * current_price
+            capped_bias_5d = max(-cap_limit_5d, min(bias_5d * damping_factor, cap_limit_5d))
+            if vix_current > 22:
+                capped_bias_5d = 0.0
             week_pred += capped_bias_5d
 
         # Визначаємо емодзі-бейдж надійності
-        if count_1d < 3:
+        if count_1d < 5:
             badge = "🟡"
         elif win_rate_1d >= 65.0:
             badge = "🟢"
@@ -291,7 +311,7 @@ def train_and_upload():
         emoji_1d = "📈" if tomorrow_pred > current_price else "📉"
         emoji_5d = "🚀" if week_pred > current_price else "📉"
 
-        win_rate_str = f" [WR: {win_rate_1d:.0f}%]" if count_1d >= 3 else ""
+        win_rate_str = f" [WR: {win_rate_1d:.0f}%]" if count_1d >= 5 else ""
 
         # Формуємо рядок звіту
         tg_report += f"🔹 {badge} *{ticker}* (Поточна: ${current_price:.2f}){win_rate_str}:\n"
