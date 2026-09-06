@@ -172,6 +172,7 @@ def train_and_upload():
         target_mean_price = info.get("targetMeanPrice")
         forward_pe = info.get("forwardPE")
         trailing_pe = info.get("trailingPE")
+        recommendation_mean = info.get("recommendationMean")
 
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)
         if len(df) < 35:
@@ -232,6 +233,11 @@ def train_and_upload():
         else:
             df["PE_Expansion"] = 1.0
 
+        if recommendation_mean is not None and 1.0 <= recommendation_mean <= 5.0:
+            df["Analyst_Score"] = float(recommendation_mean)
+        else:
+            df["Analyst_Score"] = 2.5
+
         # RSI
         delta = df["Close"].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -243,7 +249,7 @@ def train_and_upload():
             "Close", "Volume", "MA_5", "MA_20", "Daily_Return", "Volatility_5",
             "Intraday_Return", "Day_Range", "Gap", "Day_of_Week", "Volume_Ratio",
             "SP500_Return", "VIX_Close", "RSI_14", "Distance_to_MA200",
-            "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside", "PE_Expansion",
+            "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside", "PE_Expansion", "Analyst_Score",
         ]
 
         df = df.dropna(subset=feature_cols)
