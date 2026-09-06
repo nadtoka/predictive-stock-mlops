@@ -172,8 +172,8 @@ def train_and_upload():
         target_mean_price = info.get("targetMeanPrice")
 
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)
-        if len(df) < 40:
-            print(f"⚠️ Для {ticker} недостатньо історії навіть для мінімального спліту ({len(df)} рядків, потрібно >= 40). Пропускаємо.")
+        if len(df) < 35:
+            print(f"⚠️ Для {ticker} недостатньо історії ({len(df)} рядків, потрібно >= 35). Пропускаємо.")
             continue
         df.index = pd.to_datetime(df.index, utc=True).normalize()
 
@@ -251,11 +251,16 @@ def train_and_upload():
             print(f"❌ Недостатньо даних після створення індикаторів для {ticker}.")
             continue
 
-        train_df = df.iloc[:-20]
-        test_df = df.iloc[-20:]
+        test_size = max(3, min(20, int(len(df) * 0.15)))
+        train_df = df.iloc[:-test_size]
+        test_df = df.iloc[-test_size:]
 
         X_train, y_train = train_df[feature_cols], train_df[["Target_1d", "Target_5d", "Target_20d"]]
         X_test, y_test = test_df[feature_cols], test_df[["Target_1d", "Target_5d", "Target_20d"]]
+
+        if len(X_train) < 5 or len(X_test) == 0:
+            print(f"❌ Недостатньо тренувальних зразків для {ticker} (train: {len(X_train)}). Пропускаємо.")
+            continue
 
         model = RandomForestRegressor(
             n_estimators=200,

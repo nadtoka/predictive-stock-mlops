@@ -147,8 +147,8 @@ def train_and_upload():
             df = pd.read_csv(data_path, index_col=0, parse_dates=True)
             df.index = pd.to_datetime(df.index, utc=True).normalize()
 
-            if len(df) < 40:
-                print(f"⚠️ Для {ticker} замало історії ({len(df)} рядків, потрібно >= 40). Пропускаємо.")
+            if len(df) < 35:
+                print(f"⚠️ Для {ticker} недостатньо історії ({len(df)} рядків, потрібно >= 35). Пропускаємо.")
                 continue
 
             print(f"⚡ Обробка та XGBoost тренування для {ticker}...")
@@ -240,12 +240,16 @@ def train_and_upload():
                 print(f"❌ Недостатньо тарґетів для {ticker}.")
                 continue
 
-            test_size = 20 if len(df) > 50 else max(5, int(len(df) * 0.2))
+            test_size = max(3, min(20, int(len(df) * 0.15)))
             train_df = df.iloc[:-test_size]
             test_df = df.iloc[-test_size:]
 
             X_train, y_train = train_df[feature_cols], train_df[["Target_1d", "Target_5d", "Target_20d"]]
             X_test, y_test = test_df[feature_cols], test_df[["Target_1d", "Target_5d", "Target_20d"]]
+
+            if len(X_train) < 5 or len(X_test) == 0:
+                print(f"❌ Недостатньо тренувальних зразків для {ticker} (train: {len(X_train)}). Пропускаємо.")
+                continue
 
             # XGBoost з контролем перенавчання
             base_xgb = XGBRegressor(
