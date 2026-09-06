@@ -1,4 +1,4 @@
-# Predictive Stock MLOps Project 🚀 (v3.1)
+# Predictive Stock MLOps Project 🚀 (v3.2)
 
 🌐 **Language / Мова:** [English] | [🇺🇦 Українська](README.uk.md)
 
@@ -6,7 +6,7 @@
 
 An end-to-end MLOps project for automated financial data ingestion, daily model retraining (Continuous Training) optimized for each individual asset, artifact versioning in the Hugging Face Hub, and automated operational monitoring via Telegram.
 
-In version **v3.1**, the system introduces a Continuous Learning loop with adaptive bias correction and trust-based confidence badges, extending the autonomous evaluation flow with stronger production feedback and operational reliability.
+In version **v3.2**, the system expands into a parallel A/B model tournament with Random Forest and XGBoost, while adding native support for fresh IPO-era equities through elastic rolling windows and resilient short-history handling. This release improves production reliability during young-asset onboarding and stabilizes feedback loops under volatile market conditions.
 
 ---
 
@@ -19,23 +19,28 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 * **Macro Context:** Concurrently ingests global market indicators: the benchmark US economic index **S&P 500 (`^GSPC`)** and the Wall Street fear index **CBOE Volatility Index (`^VIX`)**.
 * Automatically synchronizes and versions raw datasets (`.csv`) in the **Hugging Face Datasets** registry.
 
-### 2. Continuous Training Engine (`train.py`)
-* Triggers nightly via system Cron on an isolated Runner-VM (Proxmox / Docker Swarm).
+### 2. Continuous Training Engine (`train.py` and `train_xgb.py`)
+* The training stage now runs in parallel A/B mode: two independent model circuits operate side by side for the same asset batch.
+* **Contour A (`train.py`):** `RandomForestRegressor` with 200 decision trees and `max_depth=12`, optimized for a multi-output financial return forecast.
+* **Contour B (`train_xgb.py`):** `XGBRegressor` wrapped in `MultiOutputRegressor` with regularization settings: `max_depth=4`, `learning_rate=0.03`, `subsample=0.8`, `colsample_bytree=0.8`.
 * **Fail-Safe Time Alignment:** Enforces explicit conversion of all indices to `UTC` and normalizes them to pure midnight using `.normalize()`, eliminating `NaN` anomalies during feature merging.
 * **Deep Feature Engineering (16-Feature Matrix):** Dynamically constructs technical, calendar, macroeconomic, and fundamental data points.
-* **Multi-Output Training:** The trained `RandomForestRegressor` (200 decision trees, `max_depth=12`) operates as a multi-objective regressor. Training on relative percentage returns (`pct_change`), it predicts a vector of two values in a single forward pass: market movement for **1 day ahead (tomorrow)** and cumulative movement for **5 days ahead (trading week)**.
+* **Multi-Output Training:** Both models operate as multi-objective regressors. Training on relative percentage returns (`pct_change`), each model predicts a vector of two values in a single forward pass: market movement for **1 day ahead (tomorrow)** and cumulative movement for **5 days ahead (trading week)**.
 * **Dual-Currency Validation:** Computes the model's Mean Absolute Error (MAE) for both horizons independently, converting percentage metrics into real USD value based on the asset's current price.
+* **IPO Support:** Fresh equities with short histories are handled through elastic rolling windows using `min_periods=1` for `MA_200`, `MA_20`, `Volatility_5`, and `Volume_MA15`, allowing assets with as little as 40 sessions of history to remain trainable without collapsing into all-NaN feature tables.
 * **Closed-Loop Integration:** At the start of each run, loads `evaluation_history.csv` from Hugging Face Datasets to incorporate retrospective error context into the next training cycle.
-* **Dynamic Bias Correction:** Automatically computes the median error shift (Bias) over the past 14 days and compensates predictions with a capped adjustment of ±3% relative to the current price.
+* **Dynamic Bias Correction:** Automatically computes the median error shift (Bias) over the past 14 days and compensates predictions with damping factor `0.2`, capped at ±0.5% for 1d and ±1.5% for 5d. If `VIX > 22`, the compensation is zeroed to avoid bias learned during turbulent panic regimes.
 * **Confidence Badges & Win Rate:** Injects trust badges into the Telegram report based on the latest win-rate signal (🟢 WinRate ≥ 65%, 🟡 Moderate / limited data, 🔴 WinRate < 45%).
 * Automatically pushes serialized model binaries into the **Hugging Face Model Registry** and dispatches a compact Markdown digest to **Telegram**.
 
-### 3. Continuous Evaluation Engine (`evaluate.py`)
+### 3. Continuous Evaluation Engine (`evaluate.py` and `evaluate_xgb.py`)
 * An autonomous system referee running nightly in a Docker container immediately after the training process.
-* Streams the prediction logs (`predictions_history.csv`) and matches them against benchmark ground truth closing prices harvested through the Yahoo Finance API.
+* Both model tracks are evaluated in parallel: `evaluate.py` audits the Random Forest branch and `evaluate_xgb.py` audits the XGBoost branch.
+* Streams the prediction logs (`predictions_history.csv` and `predictions_history_xgb.csv`) and matches them against benchmark ground truth closing prices harvested through the Yahoo Finance API.
 * Computes Mean Absolute Error (MAE in USD and percentage metrics) along with Directional Accuracy (Win Rate) for both 1d and 5d forecasting horizons.
 * Features absolute idempotency: tracks audited states via unique composite keys to prevent redundant verifications.
-* Automatically synchronizes the evaluation grid into `evaluation_history.csv` hosted in Hugging Face Datasets and fires an elastic, line-by-line chunked analytical feedback report to Telegram.
+* Protects against non-trading days and exchange holidays by resolving the next actual market session instead of using a naive calendar BusinessDay shift.
+* Automatically synchronizes the evaluation grid into `evaluation_history.csv` hosted in Hugging Face Datasets and fires an elastic, line-by-line chunked analytical feedback report to Telegram split at 3800 characters per message.
 
 ### 4. Public Client Inference (`predict.py`)
 * A lightweight script for end-users or external integrations (on-demand inference).
@@ -73,6 +78,7 @@ The core pipeline is completely stateless and scales seamlessly without rebuildi
 * `HF_TOKEN` — Hugging Face authentication token with `Write` access.
 * `HF_REPO` — Target repository path for datasets (`username/predictive-stock-dataset`).
 * `HF_MODEL_REPO` — Target repository path for model binaries (`username/predictive-stock-models`).
+* `HF_MODEL_REPO_XGB` — Target repository path for XGBoost model binaries (`nadtoka/predictive-stock-models-xgb`).
 * `TELEGRAM_BOT_TOKEN` — Bot authorization token issued by `@BotFather`.
 * `TELEGRAM_CHAT_ID` — Your personal Telegram user account ID.
 
@@ -152,10 +158,14 @@ predictive-stock-mlops/
 │   └── docker-ci.yml       # Automated CI/CD (Build -> Smoke Test -> Push)
 ├── data/                   # Local raw historical cache (Git ignored)
 ├── models/                 # Local serialized model binaries (Git ignored)
+├── models_xgb/             # Local cached XGBoost model binaries (Git ignored)
 ├── Dockerfile              # Instructions for building the immutable runtime
 ├── fetch_data.py           # Data Ingestion module (Equities + S&P 500 + VIX)
-├── train.py                # 16-feature assembly, Multi-Output training, dual MAE, TG engine
-├── evaluate.py             # Automated model accuracy auditor, MAE % and Win Rate tracker
+├── run_pipeline.sh         # Main orchestration script for the A/B model pipeline
+├── train.py                # Random Forest A-contour, 16-feature assembly, dual MAE, TG engine
+├── train_xgb.py            # XGBoost B-contour, multi-output training, TG engine
+├── evaluate.py             # Automated Random Forest accuracy auditor, MAE % and Win Rate tracker
+├── evaluate_xgb.py         # Automated XGBoost accuracy auditor and market feedback loop
 ├── predict.py              # Lightweight client inference (On-demand 1d and 5d forecasts)
 └── requirements.txt        # Frozen dependency tree (scikit-learn, joblib, pandas, yfinance)
 ```
