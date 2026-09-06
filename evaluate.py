@@ -5,7 +5,6 @@ import yfinance as yf
 from huggingface_hub import HfApi
 from curl_cffi import requests
 
-# Глушимо FutureWarning від Pandas/yfinance
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 def send_telegram_report(text):
@@ -21,7 +20,6 @@ def send_telegram_report(text):
     chunks = []
     current_chunk = ""
     
-    # Розбиваємо строго по рядках (\n) для ліквідації пастки довгих повідомлень
     lines = text.split("\n")
     for line in lines:
         if len(current_chunk) + len(line) + 1 > MAX_LEN:
@@ -71,27 +69,31 @@ def evaluate_predictions():
         print("ℹ️ Історія прогнозів порожня. Оцінювати нічого.")
         return
 
-    # Завантажуємо існуючий лог метрик, щоб не дублювати перевірки
     eval_file_path = "evaluation_history.csv"
     remote_eval_url = f"https://huggingface.co/datasets/{hf_repo}/raw/main/{eval_file_path}"
     try:
         df_eval_existing = pd.read_csv(remote_eval_url)
+        # Самолікування: відкидаємо попередні записи з NaN, якщо такі потрапили в історію
+        if not df_eval_existing.empty and "actual_price" in df_eval_existing.columns:
+            df_eval_existing = df_eval_existing.dropna(subset=["actual_price", "mae_pct"])
+            df_eval_existing = df_eval_existing[df_eval_existing["actual_price"] > 0]
         processed_keys = set(df_eval_existing["eval_id"].tolist())
-        print(f"📋 Знайдено базу аудиту. Вже перевірено сутностей: {len(processed_keys)}")
+        print(f"📋 Знайдено валідну базу аудиту. Перевірено сутностей: {len(processed_keys)}")
     except Exception:
         df_eval_existing = pd.DataFrame()
         processed_keys = set()
         print("✨ База аудиту не знайдена. Буде створено новий файл метрик...")
 
-    # Оптимізуємо запити до Yahoo Finance (групуємо унікальні тікери)
     tickers = df_history["ticker"].unique()
     actual_data = {}
     
     print("📡 Завантаження реальних історичних цін закриття з yfinance...")
     for ticker in tickers:
         try:
-            stock_df = yf.Ticker(ticker).history(period="1mo")
-            if not stock_df.empty:
+            stock_df = yf.Ticker(ticker).history(period="3mo")
+            if not stock_df.empty and "Close" in stock_df:
+                stock_df = stock_df.dropna(subset=["Close"])
+                stock_df = stock_df[stock_df["Close"] > 0]
                 stock_df.index = pd.to_datetime(stock_df.index, utc=True).normalize()
                 actual_data[ticker] = stock_df["Close"]
         except Exception as e:
@@ -99,7 +101,6 @@ def evaluate_predictions():
 
     new_evaluations = []
     
-    # Парсимо історію прогнозів
     for _, row in df_history.iterrows():
         pred_date_str = str(row["date"])
         ticker = row["ticker"]
@@ -115,63 +116,66 @@ def evaluate_predictions():
             
         ticker_series = actual_data[ticker]
         
-        # Вираховуємо точні бізнес-дні, коли прогноз мав закритися
-        target_date_1d = pred_date + pd.offsets.BusinessDay(1)
-        target_date_5d = pred_date + pd.offsets.BusinessDay(5)
+        # Беремо сесії, що відбулися ВИКЛЮЧНО після дня створення прогнозу
+        future_trades = ticker_series[ticker_series.index > pred_date]
 
-        # 1. Валідація 1-денного прогнозу
-        if eval_id_1d not in processed_keys and target_date_1d in ticker_series.index:
-            actual_close_1d = float(ticker_series.loc[target_date_1d])
-            pred_1d = float(row["pred_1d"])
+        # 1. Валідація 1-денного прогнозу (перша торгова сесія після прогнозу)
+        if eval_id_1d not in processed_keys and len(future_trades) >= 1:
+            target_date_1d = future_trades.index[0]
+            actual_close_1d = float(future_trades.iloc[0])
             
-            mae_usd = abs(actual_close_1d - pred_1d)
-            mae_pct = (mae_usd / actual_close_1d) * 100
-            
-            actual_dir = 1 if actual_close_1d > current_price else (-1 if actual_close_1d < current_price else 0)
-            pred_dir = 1 if pred_1d > current_price else (-1 if pred_1d < current_price else 0)
-            is_correct = 1 if actual_dir == pred_dir else 0
-            
-            new_evaluations.append({
-                "eval_id": eval_id_1d,
-                "prediction_date": pred_date_str,
-                "target_date": target_date_1d.strftime("%Y-%m-%d"),
-                "ticker": ticker,
-                "horizon": "1d",
-                "current_price": current_price,
-                "predicted_price": pred_1d,
-                "actual_price": actual_close_1d,
-                "mae_usd": mae_usd,
-                "mae_pct": mae_pct,
-                "direction_correct": is_correct
-            })
-            processed_keys.add(eval_id_1d)
+            if not pd.isna(actual_close_1d) and actual_close_1d > 0:
+                pred_1d = float(row["pred_1d"])
+                mae_usd = abs(actual_close_1d - pred_1d)
+                mae_pct = (mae_usd / actual_close_1d) * 100
+                
+                actual_dir = 1 if actual_close_1d > current_price else (-1 if actual_close_1d < current_price else 0)
+                pred_dir = 1 if pred_1d > current_price else (-1 if pred_1d < current_price else 0)
+                is_correct = 1 if actual_dir == pred_dir else 0
+                
+                new_evaluations.append({
+                    "eval_id": eval_id_1d,
+                    "prediction_date": pred_date_str,
+                    "target_date": target_date_1d.strftime("%Y-%m-%d"),
+                    "ticker": ticker,
+                    "horizon": "1d",
+                    "current_price": current_price,
+                    "predicted_price": pred_1d,
+                    "actual_price": actual_close_1d,
+                    "mae_usd": mae_usd,
+                    "mae_pct": mae_pct,
+                    "direction_correct": is_correct
+                })
+                processed_keys.add(eval_id_1d)
 
-        # 2. Валідація 5-денного прогнозу
-        if eval_id_5d not in processed_keys and target_date_5d in ticker_series.index:
-            actual_close_5d = float(ticker_series.loc[target_date_5d])
-            pred_5d = float(row["pred_5d"])
+        # 2. Валідація 5-денного прогнозу (п'ята торгова сесія після прогнозу)
+        if eval_id_5d not in processed_keys and len(future_trades) >= 5:
+            target_date_5d = future_trades.index[4]
+            actual_close_5d = float(future_trades.iloc[4])
             
-            mae_usd = abs(actual_close_5d - pred_5d)
-            mae_pct = (mae_usd / actual_close_5d) * 100
-            
-            actual_dir = 1 if actual_close_5d > current_price else (-1 if actual_close_5d < current_price else 0)
-            pred_dir = 1 if pred_5d > current_price else (-1 if pred_5d < current_price else 0)
-            is_correct = 1 if actual_dir == pred_dir else 0
-            
-            new_evaluations.append({
-                "eval_id": eval_id_5d,
-                "prediction_date": pred_date_str,
-                "target_date": target_date_5d.strftime("%Y-%m-%d"),
-                "ticker": ticker,
-                "horizon": "5d",
-                "current_price": current_price,
-                "predicted_price": pred_5d,
-                "actual_price": actual_close_5d,
-                "mae_usd": mae_usd,
-                "mae_pct": mae_pct,
-                "direction_correct": is_correct
-            })
-            processed_keys.add(eval_id_5d)
+            if not pd.isna(actual_close_5d) and actual_close_5d > 0:
+                pred_5d = float(row["pred_5d"])
+                mae_usd = abs(actual_close_5d - pred_5d)
+                mae_pct = (mae_usd / actual_close_5d) * 100
+                
+                actual_dir = 1 if actual_close_5d > current_price else (-1 if actual_close_5d < current_price else 0)
+                pred_dir = 1 if pred_5d > current_price else (-1 if pred_5d < current_price else 0)
+                is_correct = 1 if actual_dir == pred_dir else 0
+                
+                new_evaluations.append({
+                    "eval_id": eval_id_5d,
+                    "prediction_date": pred_date_str,
+                    "target_date": target_date_5d.strftime("%Y-%m-%d"),
+                    "ticker": ticker,
+                    "horizon": "5d",
+                    "current_price": current_price,
+                    "predicted_price": pred_5d,
+                    "actual_price": actual_close_5d,
+                    "mae_usd": mae_usd,
+                    "mae_pct": mae_pct,
+                    "direction_correct": is_correct
+                })
+                processed_keys.add(eval_id_5d)
 
     if new_evaluations:
         df_new_eval = pd.DataFrame(new_evaluations)
@@ -197,7 +201,7 @@ def evaluate_predictions():
                     tg_report += f"    {dir_emoji} *{r['ticker']}*: Факт ${r['actual_price']:.2f} | ШІ ${r['predicted_price']:.2f} (MAE: {r['mae_pct']:.2f}%)\n"
 
         try:
-            print("💾 Синхронізаціяльної матриці оцінки з Hugging Face...")
+            print("💾 Синхронізація матриці оцінки з Hugging Face...")
             api = HfApi()
             csv_data = df_final_eval.to_csv(index=False)
             api.upload_file(
