@@ -63,6 +63,7 @@ def calculate_ticker_metrics(df_eval, current_ticker):
     metrics = {
         "1d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
         "5d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
+        "20d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
     }
     if df_eval is None or df_eval.empty or "ticker" not in df_eval.columns:
         return metrics
@@ -75,7 +76,7 @@ def calculate_ticker_metrics(df_eval, current_ticker):
     now_date = pd.Timestamp.now().tz_localize(None).floor("D")
     cutoff_date = now_date - pd.Timedelta(days=14)
 
-    for horizon in ["1d", "5d"]:
+    for horizon in ["1d", "5d", "20d"]:
         df_h = df_ticker[df_ticker["horizon"] == horizon].copy()
         if df_h.empty:
             continue
@@ -232,7 +233,8 @@ def train_and_upload():
 
             df["Target_1d"] = df["Close"].pct_change(fill_method=None).shift(-1)
             df["Target_5d"] = df["Close"].pct_change(periods=5, fill_method=None).shift(-5)
-            df = df.dropna(subset=["Target_1d", "Target_5d"])
+            df["Target_20d"] = df["Close"].pct_change(periods=20, fill_method=None).shift(-20)
+            df = df.dropna(subset=["Target_1d", "Target_5d", "Target_20d"])
 
             if df.empty or len(df) < 20:
                 print(f"❌ Недостатньо тарґетів для {ticker}.")
@@ -242,8 +244,8 @@ def train_and_upload():
             train_df = df.iloc[:-test_size]
             test_df = df.iloc[-test_size:]
 
-            X_train, y_train = train_df[feature_cols], train_df[["Target_1d", "Target_5d"]]
-            X_test, y_test = test_df[feature_cols], test_df[["Target_1d", "Target_5d"]]
+            X_train, y_train = train_df[feature_cols], train_df[["Target_1d", "Target_5d", "Target_20d"]]
+            X_test, y_test = test_df[feature_cols], test_df[["Target_1d", "Target_5d", "Target_20d"]]
 
             # XGBoost з контролем перенавчання
             base_xgb = XGBRegressor(
@@ -262,22 +264,27 @@ def train_and_upload():
 
             # Валідація
             predictions = model.predict(X_test)
-            mae_1d, mae_5d = mean_absolute_error(y_test, predictions, multioutput="raw_values")
+            mae_1d, mae_5d, mae_20d = mean_absolute_error(y_test, predictions, multioutput="raw_values")
             mae_1d_pct = mae_1d * 100
             mae_5d_pct = mae_5d * 100
+            mae_20d_pct = mae_20d * 100
             mae_1d_usd = current_price * mae_1d
             mae_5d_usd = current_price * mae_5d
+            mae_20d_usd = current_price * mae_20d
 
             preds = model.predict(latest_features)[0]
             tomorrow_pred = current_price * (1 + preds[0])
             week_pred = current_price * (1 + preds[1])
+            month_pred = current_price * (1 + preds[2])
 
             # Feedback loop
             ticker_metrics = calculate_ticker_metrics(df_eval, ticker)
             bias_1d = ticker_metrics["1d"]["bias"]
             bias_5d = ticker_metrics["5d"]["bias"]
+            bias_20d = ticker_metrics["20d"]["bias"]
             count_1d = ticker_metrics["1d"]["count"]
             count_5d = ticker_metrics["5d"]["count"]
+            count_20d = ticker_metrics["20d"]["count"]
             win_rate_1d = ticker_metrics["1d"]["win_rate"]
 
             if vix_current <= 22.0:
@@ -287,6 +294,11 @@ def train_and_upload():
                 if count_5d >= 5:
                     cap_5d = 0.015 * current_price
                     week_pred += max(-cap_5d, min(bias_5d * 0.2, cap_5d))
+                if count_20d >= 5:
+                    cap_20d = 0.030 * current_price
+                    month_pred += max(-cap_20d, min(bias_20d * 0.2, cap_20d))
+            else:
+                month_pred = current_price * (1 + preds[2])
 
             if count_1d < 5:
                 badge = "🟡"
@@ -307,9 +319,11 @@ def train_and_upload():
 
             date_1d = last_date + pd.offsets.BusinessDay(1)
             date_5d = last_date + pd.offsets.BusinessDay(5)
+            date_20d = last_date + pd.offsets.BusinessDay(20)
 
             day_1d_text = f"{ua_days[date_1d.weekday()]} ({date_1d.strftime('%d.%m')})"
             day_5d_text = f"{ua_days[date_5d.weekday()]} ({date_5d.strftime('%d.%m')})"
+            day_20d_text = f"{ua_days[date_20d.weekday()]} ({date_20d.strftime('%d.%m')})"
 
             daily_predictions.append({
                 "date": last_date.strftime("%Y-%m-%d"),
@@ -317,15 +331,18 @@ def train_and_upload():
                 "current_price": float(current_price),
                 "pred_1d": float(tomorrow_pred),
                 "pred_5d": float(week_pred),
+                "pred_20d": float(month_pred),
             })
 
             emoji_1d = "📈" if tomorrow_pred > current_price else "📉"
             emoji_5d = "🚀" if week_pred > current_price else "📉"
+            emoji_20d = "🚀" if month_pred > current_price else "📉"
             win_rate_str = f" [WR: {win_rate_1d:.0f}%]" if count_1d >= 5 else ""
 
             tg_report += f"🔹 {badge} *{ticker}* (Поточна: ${current_price:.2f}){win_rate_str}:\n"
             tg_report += f"  • {day_1d_text} {emoji_1d}: ${tomorrow_pred:.2f} | MAE: {mae_1d_pct:.2f}% (${mae_1d_usd:.2f})\n"
-            tg_report += f"  • {day_5d_text} {emoji_5d}: ${week_pred:.2f} | MAE: {mae_5d_pct:.2f}% (${mae_5d_usd:.2f})\n\n"
+            tg_report += f"  • {day_5d_text} {emoji_5d}: ${week_pred:.2f} | MAE: {mae_5d_pct:.2f}% (${mae_5d_usd:.2f})\n"
+            tg_report += f"  • {day_20d_text} (місяць) {emoji_20d}: ${month_pred:.2f} | MAE: {mae_20d_pct:.2f}% (${mae_20d_usd:.2f})\n\n"
 
         except Exception as e:
             print(f"❌ Помилка тренування XGBoost для {ticker}: {e}")
@@ -358,7 +375,7 @@ def train_and_upload():
             try:
                 df_history = pd.read_csv(remote_url)
             except Exception:
-                df_history = pd.DataFrame(columns=["date", "ticker", "current_price", "pred_1d", "pred_5d"])
+                df_history = pd.DataFrame(columns=["date", "ticker", "current_price", "pred_1d", "pred_5d", "pred_20d"])
 
             df_new = pd.DataFrame(daily_predictions)
             df_combined = pd.concat([df_history, df_new], ignore_index=True)

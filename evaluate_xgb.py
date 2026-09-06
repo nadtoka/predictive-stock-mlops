@@ -89,6 +89,7 @@ def evaluate_predictions():
 
         eval_id_1d = f"{pred_date_str}_{ticker}_1d_xgb"
         eval_id_5d = f"{pred_date_str}_{ticker}_5d_xgb"
+        eval_id_20d = f"{pred_date_str}_{ticker}_20d_xgb"
 
         pred_date = pd.to_datetime(pred_date_str, utc=True).normalize()
         if ticker not in actual_data:
@@ -151,6 +152,33 @@ def evaluate_predictions():
                 })
                 processed_keys.add(eval_id_5d)
 
+        # 20d
+        if eval_id_20d not in processed_keys and len(future_trades) >= 20:
+            target_date_20d = future_trades.index[19]
+            actual_close_20d = float(future_trades.iloc[19])
+            if not pd.isna(actual_close_20d) and actual_close_20d > 0:
+                pred_20d = float(row["pred_20d"])
+                mae_usd = abs(actual_close_20d - pred_20d)
+                mae_pct = (mae_usd / actual_close_20d) * 100
+                actual_dir = 1 if actual_close_20d > current_price else (-1 if actual_close_20d < current_price else 0)
+                pred_dir = 1 if pred_20d > current_price else (-1 if pred_20d < current_price else 0)
+                is_correct = 1 if actual_dir == pred_dir else 0
+
+                new_evaluations.append({
+                    "eval_id": eval_id_20d,
+                    "prediction_date": pred_date_str,
+                    "target_date": target_date_20d.strftime("%Y-%m-%d"),
+                    "ticker": ticker,
+                    "horizon": "20d",
+                    "current_price": current_price,
+                    "predicted_price": pred_20d,
+                    "actual_price": actual_close_20d,
+                    "mae_usd": mae_usd,
+                    "mae_pct": mae_pct,
+                    "direction_correct": is_correct
+                })
+                processed_keys.add(eval_id_20d)
+
     if new_evaluations:
         df_new_eval = pd.DataFrame(new_evaluations)
         df_final_eval = pd.concat([df_eval_existing, df_new_eval], ignore_index=True)
@@ -159,7 +187,7 @@ def evaluate_predictions():
         tg_report += "━━━━━━━━━━━━━━━━━━━━\n"
         tg_report += f"✅ Оцінено нових дозрілих прогнозів: {len(new_evaluations)}\n"
 
-        for horizon in ["1d", "5d"]:
+        for horizon in ["1d", "5d", "20d"]:
             sub = df_new_eval[df_new_eval["horizon"] == horizon]
             if not sub.empty:
                 avg_mae_pct = sub["mae_pct"].mean()

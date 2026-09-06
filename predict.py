@@ -33,6 +33,7 @@ def calculate_ticker_metrics(df_eval, current_ticker):
     metrics = {
         "1d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
         "5d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
+        "20d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
     }
     if df_eval is None or df_eval.empty or "ticker" not in df_eval.columns:
         return metrics
@@ -45,7 +46,7 @@ def calculate_ticker_metrics(df_eval, current_ticker):
     now_date = pd.Timestamp.now().tz_localize(None).floor("D")
     cutoff_date = now_date - pd.Timedelta(days=14)
 
-    for horizon in ["1d", "5d"]:
+    for horizon in ["1d", "5d", "20d"]:
         df_h = df_ticker[df_ticker["horizon"] == horizon].copy()
         if df_h.empty:
             continue
@@ -197,13 +198,16 @@ def run_inference(ticker, df_eval=None):
         preds = model.predict(latest_features)[0]
         tomorrow_pred = current_price * (1 + preds[0])
         week_pred = current_price * (1 + preds[1])
+        month_pred = current_price * (1 + preds[2])
 
         # 🧠 CONTINUOUS LEARNING: Корекція зсуву та визначення бейджа надійності
         ticker_metrics = calculate_ticker_metrics(df_eval, ticker)
         bias_1d = ticker_metrics["1d"]["bias"]
         bias_5d = ticker_metrics["5d"]["bias"]
+        bias_20d = ticker_metrics["20d"]["bias"]
         count_1d = ticker_metrics["1d"]["count"]
         count_5d = ticker_metrics["5d"]["count"]
+        count_20d = ticker_metrics["20d"]["count"]
         win_rate_1d = ticker_metrics["1d"]["win_rate"]
 
         # Застосовуємо компенсацію з демпфуванням 0.2 та лімітами (тільки якщо ринок стабільний: VIX <= 22)
@@ -217,6 +221,11 @@ def run_inference(ticker, df_eval=None):
                 cap_5d = 0.015 * current_price  # ліміт ±1.5%
                 capped_bias_5d = max(-cap_5d, min(bias_5d * 0.2, cap_5d))
                 week_pred += capped_bias_5d
+
+            if count_20d >= 5:
+                cap_20d = 0.030 * current_price
+                capped_bias_20d = max(-cap_20d, min(bias_20d * 0.2, cap_20d))
+                month_pred += capped_bias_20d
 
         # Бейдж надійності
         if count_1d < 5:
@@ -233,12 +242,15 @@ def run_inference(ticker, df_eval=None):
 
         date_1d = last_date + pd.offsets.BusinessDay(1)
         date_5d = last_date + pd.offsets.BusinessDay(5)
+        date_20d = last_date + pd.offsets.BusinessDay(20)
 
         day_1d_text = f"{ua_days[date_1d.weekday()]} ({date_1d.strftime('%d.%m')})"
         day_5d_text = f"{ua_days[date_5d.weekday()]} ({date_5d.strftime('%d.%m')})"
+        day_20d_text = f"{ua_days[date_20d.weekday()]} ({date_20d.strftime('%d.%m')})"
 
         emoji_1d = "📈" if tomorrow_pred > current_price else "📉"
         emoji_5d = "🚀" if week_pred > current_price else "📉"
+        emoji_20d = "🚀" if month_pred > current_price else "📉"
         win_rate_str = f" [WR: {win_rate_1d:.0f}%]" if count_1d >= 5 else ""
 
         print(f"🔮 === ПРОГНОЗ ВІД ШІ ===")
@@ -246,6 +258,7 @@ def run_inference(ticker, df_eval=None):
         print(f"   📈 Поточна ціна на ринку: ${current_price:.2f}")
         print(f"   🚀 Прогноз на {day_1d_text}: ${tomorrow_pred:.2f} {emoji_1d}")
         print(f"   📅 Прогноз на {day_5d_text}: ${week_pred:.2f} {emoji_5d}")
+        print(f"   📆 Прогноз на {day_20d_text}: ${month_pred:.2f} {emoji_20d}")
 
     except Exception as e:
         print(f"❌ Сталася помилка під час інференсу для {ticker}: {e}")
