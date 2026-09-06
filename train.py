@@ -170,6 +170,8 @@ def train_and_upload():
         rev_growth = info.get("revenueGrowth")
         rev_growth = rev_growth if rev_growth not in (None, 0) else 0
         target_mean_price = info.get("targetMeanPrice")
+        forward_pe = info.get("forwardPE")
+        trailing_pe = info.get("trailingPE")
 
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)
         if len(df) < 35:
@@ -220,6 +222,16 @@ def train_and_upload():
         else:
             df["Analyst_Upside"] = 0.0
 
+        if (
+            forward_pe is not None
+            and trailing_pe is not None
+            and forward_pe > 0
+            and trailing_pe > 0
+        ):
+            df["PE_Expansion"] = float(forward_pe / trailing_pe)
+        else:
+            df["PE_Expansion"] = 1.0
+
         # RSI
         delta = df["Close"].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -231,7 +243,7 @@ def train_and_upload():
             "Close", "Volume", "MA_5", "MA_20", "Daily_Return", "Volatility_5",
             "Intraday_Return", "Day_Range", "Gap", "Day_of_Week", "Volume_Ratio",
             "SP500_Return", "VIX_Close", "RSI_14", "Distance_to_MA200",
-            "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside",
+            "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside", "PE_Expansion",
         ]
 
         df = df.dropna(subset=feature_cols)

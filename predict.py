@@ -94,6 +94,8 @@ def prepare_features_for_prediction(ticker):
     rev_growth = info.get("revenueGrowth")
     rev_growth = rev_growth if rev_growth not in (None, 0) else 0
     target_mean_price = info.get("targetMeanPrice")
+    forward_pe = info.get("forwardPE")
+    trailing_pe = info.get("trailingPE")
 
     df = stock.history(period="2y")
 
@@ -144,6 +146,16 @@ def prepare_features_for_prediction(ticker):
     else:
         df.loc[:, "Analyst_Upside"] = 0.0
 
+    if (
+        forward_pe is not None
+        and trailing_pe is not None
+        and forward_pe > 0
+        and trailing_pe > 0
+    ):
+        df.loc[:, "PE_Expansion"] = float(forward_pe / trailing_pe)
+    else:
+        df.loc[:, "PE_Expansion"] = 1.0
+
     delta = df["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -171,6 +183,7 @@ def prepare_features_for_prediction(ticker):
         "PS_Ratio",
         "Revenue_Growth",
         "Analyst_Upside",
+        "PE_Expansion",
     ]
 
     df_latest = df.dropna(subset=feature_cols)
