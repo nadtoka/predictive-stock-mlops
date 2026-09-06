@@ -44,7 +44,7 @@ def upload_to_huggingface():
 
 if __name__ == "__main__":
     ticker_env = os.getenv("STOCK_TICKER", "AAPL")
-    tickers = [t.strip() for t in ticker_env.split(",") if t.strip()]
+    tickers = list(dict.fromkeys(t.strip() for t in ticker_env.split(",") if t.strip()))
     
     print(f"🚀 Запуск збору даних для списку: {tickers}")
     

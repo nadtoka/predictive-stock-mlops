@@ -163,7 +163,7 @@ def run_inference(ticker):
 if __name__ == "__main__":
     # Парсимо список тікерів з енву (якщо порожньо — за замовчуванням AAPL)
     target_tickers = os.getenv("STOCK_TICKER", "AAPL")
-    tickers = [t.strip() for t in target_tickers.split(",") if t.strip()]
+    tickers = list(dict.fromkeys(t.strip() for t in target_tickers.split(",") if t.strip()))
 
     print(f"🚀 Запуск інференсу для списку тікерів: {tickers}")
 

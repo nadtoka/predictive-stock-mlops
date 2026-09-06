@@ -97,7 +97,7 @@ def calculate_ticker_metrics(df_eval, current_ticker):
 
 def train_and_upload():
     target_tickers = os.getenv("STOCK_TICKER", "AAPL")
-    tickers = [t.strip() for t in target_tickers.split(",") if t.strip()]
+    tickers = list(dict.fromkeys(t.strip() for t in target_tickers.split(",") if t.strip()))
 
     hf_token = os.getenv("HF_TOKEN")
     hf_model_repo = os.getenv("HF_MODEL_REPO")
