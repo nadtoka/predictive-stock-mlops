@@ -362,6 +362,7 @@ def train_and_upload():
 
             df_new = pd.DataFrame(daily_predictions)
             df_combined = pd.concat([df_history, df_new], ignore_index=True)
+            df_combined = df_combined.drop_duplicates(subset=["date", "ticker"], keep="last")
 
             csv_data = df_combined.to_csv(index=False)
             api.upload_file(
