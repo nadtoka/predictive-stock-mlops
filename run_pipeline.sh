@@ -1,11 +1,19 @@
 #!/bin/bash
 
-# Визначаємо шлях до директорії проєкту
+# ==============================================================================
+# CONFIGURATION & PATHS
+# ==============================================================================
 BASE_DIR="/opt/stock-mlops"
 DATA_DIR="$BASE_DIR/data"
 IMAGE="ghcr.io/nadtoka/predictive-stock-mlops:latest"
 
-# Завантажуємо секрети з локального .env файлу, якщо він існує
+STOCK_TICKER="NVDA,GOOG,AAPL,MSFT,AMZN,ASML,ADBE,TSM,V,META,BULL,AMD,NET,QBTS,RGTI,IONQ,IBM,FIG,BILL,NFLX,AVGO,QQQM,UNH,FSLY,CAT,ETN,SNDK,SKHY,RKLB,INFQ,UBER,CHKP,MU,SNPS,CBRS"
+HF_REPO="nadtoka/predictive-stock-dataset"
+HF_MODEL_REPO="nadtoka/predictive-stock-models"
+
+# ==============================================================================
+# SECRETS CHECK
+# ==============================================================================
 if [ -f "$BASE_DIR/.env" ]; then
     source "$BASE_DIR/.env"
 else
@@ -13,21 +21,13 @@ else
     exit 1
 fi
 
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
-STOCK_TICKER="NVDA,GOOG,AAPL,MSFT,AMZN,ASML,ADBE,TSM,V,META,BULL,AMD,NET,QBTS,RGTI,IONQ,IBM,FIG,BILL,NFLX,AVGO,QQQM,UNH,FSLY,CAT,ETN,SNDK,SKHY,RKLB,INFQ,UBER,CHKP,MU,SNPS,CBRS"
-HF_REPO="nadtoka/predictive-stock-dataset"
-HF_MODEL_REPO="nadtoka/predictive-stock-models"
-
-DATA_DIR="/opt/stock-mlops/data"
-IMAGE="ghcr.io/nadtoka/predictive-stock-mlops:latest"
+mkdir -p "$DATA_DIR"
 
 echo "=============================================================================="
 echo "🚀 STARTING MLOPS PIPELINE: $(date)"
 echo "=============================================================================="
 
-# Пулл останнього образу про всяк випадок
+# Оновлення образу
 echo "🔄 Перевірка та оновлення Docker образу..."
 docker pull $IMAGE
 
@@ -42,9 +42,8 @@ docker run --rm \
   -v "$DATA_DIR":/app/data \
   $IMAGE python fetch_data.py
 
-# Перевіряємо, чи успішно відпрацював перший крок
 if [ $? -ne 0 ]; then
-    echo "❌ ПОМИЛКА: Збір даних завершився невдало. Тренування скасовано."
+    echo "❌ ПОМИЛКА: Збір даних завершився невдало. Пайплайн зупинено."
     exit 1
 fi
 
@@ -60,6 +59,11 @@ docker run --rm \
   -v "$DATA_DIR":/app/data \
   $IMAGE python train.py
 
+if [ $? -ne 0 ]; then
+    echo "❌ ПОМИЛКА: Тренування моделей завершилося невдало. Пайплайн зупинено."
+    exit 1
+fi
+
 # 📊 Крок 3: Контроль якості та зворотний зв'язок (evaluate.py)
 echo "📊 3. Запуск аудиту якості та розрахунку похибок моделей..."
 docker run --rm \
@@ -69,6 +73,11 @@ docker run --rm \
   -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
   -v "$DATA_DIR":/app/data \
   $IMAGE python evaluate.py
+
+if [ $? -ne 0 ]; then
+    echo "⚠️ ПОПЕРЕДЖЕННЯ: Аудит якості завершився з помилкою."
+    exit 1
+fi
 
 echo "=============================================================================="
 echo "✅ PIPELINE SUCCESSFULY FINISHED: $(date)"
