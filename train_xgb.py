@@ -13,7 +13,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 
 def send_telegram_report(text):
-    """Надсилає фінальний аналітичний звіт в Телеграм з розбиттям на чанки"""
+    """Надсилає звіт в Телеграм із розбиттям на безпечні чанки за рядками"""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -21,7 +21,7 @@ def send_telegram_report(text):
         print("ℹ️ TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не знайдені. Пропускаємо сповіщення.")
         return
 
-    MAX_LEN = 4000
+    MAX_LEN = 3800
     chunks = []
     current_chunk = ""
 
@@ -36,7 +36,7 @@ def send_telegram_report(text):
         chunks.append(current_chunk.strip())
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks, 1):
         if not chunk:
             continue
         payload = {
@@ -45,9 +45,16 @@ def send_telegram_report(text):
             "parse_mode": "Markdown",
         }
         try:
-            res = requests.post(url, json=payload, timeout=10)
-            if res.status_code != 200:
-                print(f"❌ Помилка Telegram API: {res.text}")
+            res = requests.post(url, json=payload, timeout=15)
+            if res.status_code == 200:
+                print(f"🚀 Частину {idx}/{len(chunks)} успішно надіслано в Telegram!")
+            else:
+                payload.pop("parse_mode")
+                res_plain = requests.post(url, json=payload, timeout=15)
+                if res_plain.status_code == 200:
+                    print(f"🚀 Частину {idx}/{len(chunks)} надіслано звичайним текстом (fallback)!")
+                else:
+                    print(f"❌ Помилка Telegram API (частина {idx}): {res.text}")
         except Exception as e:
             print(f"❌ Не вдалося зв'язатися з Telegram: {e}")
 

@@ -13,7 +13,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 
 def send_telegram_report(text):
-    """Надсилає фінальний аналітичний звіт в Телеграм чат"""
+    """Надсилає звіт в Телеграм із розбиттям на безпечні чанки за рядками"""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -21,21 +21,42 @@ def send_telegram_report(text):
         print("ℹ️ TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не знайдені. Пропускаємо сповіщення.")
         return
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown",
-    }
+    MAX_LEN = 3800
+    chunks = []
+    current_chunk = ""
 
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code == 200:
-            print("🚀 Аналітичний звіт успішно надіслано в Telegram!")
+    for line in text.split("\n"):
+        if len(current_chunk) + len(line) + 1 > MAX_LEN:
+            chunks.append(current_chunk.strip())
+            current_chunk = line + "\n"
         else:
-            print(f"❌ Помилка Telegram API: {res.text}")
-    except Exception as e:
-        print(f"❌ Не вдалося зв'язатися з Telegram: {e}")
+            current_chunk += line + "\n"
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    for idx, chunk in enumerate(chunks, 1):
+        if not chunk:
+            continue
+        payload = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": "Markdown",
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=15)
+            if res.status_code == 200:
+                print(f"🚀 Частину {idx}/{len(chunks)} успішно надіслано в Telegram!")
+            else:
+                payload.pop("parse_mode")
+                res_plain = requests.post(url, json=payload, timeout=15)
+                if res_plain.status_code == 200:
+                    print(f"🚀 Частину {idx}/{len(chunks)} надіслано звичайним текстом (fallback)!")
+                else:
+                    print(f"❌ Помилка Telegram API (частина {idx}): {res.text}")
+        except Exception as e:
+            print(f"❌ Не вдалося зв'язатися з Telegram: {e}")
 
 
 def calculate_ticker_metrics(df_eval, current_ticker):
