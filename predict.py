@@ -57,17 +57,17 @@ def prepare_features_for_prediction(ticker):
     df = df.join(vix_df[["VIX_Close"]], how="left")
 
     # Створюємо фічі, максимально наближені до тієї самої матриці, що в train.py
-    df.loc[:, "MA_5"] = df["Close"].rolling(window=5).mean()
-    df.loc[:, "MA_20"] = df["Close"].rolling(window=20).mean()
+    df.loc[:, "MA_5"] = df["Close"].rolling(window=5, min_periods=1).mean()
+    df.loc[:, "MA_20"] = df["Close"].rolling(window=20, min_periods=1).mean()
     df.loc[:, "Daily_Return"] = df["Close"].pct_change(fill_method=None)
-    df.loc[:, "Volatility_5"] = df["Daily_Return"].rolling(window=5).std()
+    df.loc[:, "Volatility_5"] = df["Daily_Return"].rolling(window=5, min_periods=1).std().fillna(0)
     df.loc[:, "Intraday_Return"] = (df["Close"] - df["Open"]) / df["Open"]
     df.loc[:, "Day_Range"] = (df["High"] - df["Low"]) / df["Low"]
     df.loc[:, "Gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
     df.loc[:, "Day_of_Week"] = df.index.dayofweek
-    df.loc[:, "Volume_MA15"] = df["Volume"].rolling(window=15).mean()
+    df.loc[:, "Volume_MA15"] = df["Volume"].rolling(window=15, min_periods=1).mean()
     df.loc[:, "Volume_Ratio"] = df["Volume"] / df["Volume_MA15"]
-    df.loc[:, "MA_200"] = df["Close"].rolling(window=200).mean()
+    df.loc[:, "MA_200"] = df["Close"].rolling(window=200, min_periods=1).mean()
     df.loc[:, "Distance_to_MA200"] = (df["Close"] - df["MA_200"]) / df["MA_200"]
     df.loc[:, "Month"] = df.index.month
     df.loc[:, "Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
@@ -81,9 +81,9 @@ def prepare_features_for_prediction(ticker):
     rs = gain / loss.replace(0, 1e-9)
     df.loc[:, "RSI_14"] = 100 - (100 / (1 + rs))
 
-    df_latest = df.dropna()
+    df_latest = df.dropna(subset=feature_cols)
 
-    if df_latest.empty:
+    if df_latest.empty or len(df_latest) < 25:
         raise ValueError(
             f"❌ Недостатньо даних для розрахунку індикаторів для {ticker}."
         )

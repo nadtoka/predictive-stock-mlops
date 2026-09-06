@@ -149,6 +149,9 @@ def train_and_upload():
         rev_growth = rev_growth if rev_growth not in (None, 0) else 0
 
         df = pd.read_csv(data_path, index_col=0, parse_dates=True)
+        if len(df) < 40:
+            print(f"⚠️ Для {ticker} недостатньо історії навіть для мінімального спліту ({len(df)} рядків, потрібно >= 40). Пропускаємо.")
+            continue
         df.index = pd.to_datetime(df.index, utc=True).normalize()
 
         # S&P 500
@@ -170,19 +173,19 @@ def train_and_upload():
             df["VIX_Close"] = 15.0
 
         # Індикатори (Фічі)
-        df["MA_5"] = df["Close"].rolling(window=5).mean()
-        df["MA_20"] = df["Close"].rolling(window=20).mean()
+        df["MA_5"] = df["Close"].rolling(window=5, min_periods=1).mean()
+        df["MA_20"] = df["Close"].rolling(window=20, min_periods=1).mean()
         df["Daily_Return"] = df["Close"].pct_change(fill_method=None)
-        df["Volatility_5"] = df["Daily_Return"].rolling(window=5).std()
+        df["Volatility_5"] = df["Daily_Return"].rolling(window=5, min_periods=1).std().fillna(0)
 
         df["Intraday_Return"] = (df["Close"] - df["Open"]) / df["Open"]
         df["Day_Range"] = (df["High"] - df["Low"]) / df["Low"]
         df["Gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
 
         df["Day_of_Week"] = df.index.dayofweek
-        df["Volume_MA15"] = df["Volume"].rolling(window=15).mean()
+        df["Volume_MA15"] = df["Volume"].rolling(window=15, min_periods=1).mean()
         df["Volume_Ratio"] = df["Volume"] / df["Volume_MA15"]
-        df.loc[:, "MA_200"] = df["Close"].rolling(window=200).mean()
+        df.loc[:, "MA_200"] = df["Close"].rolling(window=200, min_periods=1).mean()
         df.loc[:, "Distance_to_MA200"] = (df["Close"] - df["MA_200"]) / df["MA_200"]
         df.loc[:, "Month"] = df.index.month
         df.loc[:, "Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
@@ -205,6 +208,10 @@ def train_and_upload():
         ]
 
         df = df.dropna(subset=feature_cols)
+        if df.empty or len(df) < 25:
+            print(f"❌ Недостатньо валідних рядків після розрахунку індикаторів для {ticker}. Пропускаємо.")
+            continue
+
         latest_features = df[feature_cols].tail(1).copy()
         current_price = latest_features["Close"].values[0]
 
