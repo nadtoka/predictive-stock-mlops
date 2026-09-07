@@ -24,8 +24,8 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 * **Contour A (`train.py`):** `RandomForestRegressor` with 200 decision trees and `max_depth=12`, optimized for a multi-output financial return forecast.
 * **Contour B (`train_xgb.py`):** `XGBRegressor` wrapped in `MultiOutputRegressor` with regularization settings: `max_depth=4`, `learning_rate=0.03`, `subsample=0.8`, `colsample_bytree=0.8`.
 * **Fail-Safe Time Alignment:** Enforces explicit conversion of all indices to `UTC` and normalizes them to pure midnight using `.normalize()`, eliminating `NaN` anomalies during feature merging.
-* **Deep Feature Engineering (16-Feature Matrix):** Dynamically constructs technical, calendar, macroeconomic, and fundamental data points.
-* **Multi-Output Training:** Both models operate as multi-objective regressors. Training on relative percentage returns (`pct_change`), each model predicts a vector of two values in a single forward pass: market movement for **1 day ahead (tomorrow)** and cumulative movement for **5 days ahead (trading week)**.
+* **Deep Feature Engineering (20-Feature Matrix):** Dynamically constructs technical, calendar, macroeconomic, and fundamental data points.
+* **Multi-Output Training:** Both models operate as multi-objective regressors. Training on relative percentage returns (`pct_change`), each model predicts a vector of three targets in a single forward pass: **1 day ahead (tomorrow)**, cumulative movement for **5 days ahead (trading week)**, and **20 business days ahead (monthly business trend)**.
 * **Dual-Currency Validation:** Computes the model's Mean Absolute Error (MAE) for both horizons independently, converting percentage metrics into real USD value based on the asset's current price.
 * **IPO Support:** Fresh equities with short histories are handled through elastic rolling windows using `min_periods=1` for `MA_200`, `MA_20`, `Volatility_5`, and `Volume_MA15`, allowing assets with as little as 40 sessions of history to remain trainable without collapsing into all-NaN feature tables.
 * **Closed-Loop Integration:** At the start of each run, loads `evaluation_history.csv` from Hugging Face Datasets to incorporate retrospective error context into the next training cycle.
@@ -37,18 +37,18 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 * An autonomous system referee running nightly in a Docker container immediately after the training process.
 * Both model tracks are evaluated in parallel: `evaluate.py` audits the Random Forest branch and `evaluate_xgb.py` audits the XGBoost branch.
 * Streams the prediction logs (`predictions_history.csv` and `predictions_history_xgb.csv`) and matches them against benchmark ground truth closing prices harvested through the Yahoo Finance API.
-* Computes Mean Absolute Error (MAE in USD and percentage metrics) along with Directional Accuracy (Win Rate) for both 1d and 5d forecasting horizons.
+* Computes Mean Absolute Error (MAE in USD and percentage metrics) along with Directional Accuracy (Win Rate) for 1d, 5d, and 20d forecasting horizons.
 * Features absolute idempotency: tracks audited states via unique composite keys to prevent redundant verifications.
 * Protects against non-trading days and exchange holidays by resolving the next actual market session instead of using a naive calendar BusinessDay shift.
 * Automatically synchronizes the evaluation grid into `evaluation_history.csv` hosted in Hugging Face Datasets and fires an elastic, line-by-line chunked analytical feedback report to Telegram split at 3800 characters per message.
 
 ### 4. Public Client Inference (`predict.py`)
 * A lightweight script for end-users or external integrations (on-demand inference).
-* Operates token-free: streams the latest verified model weights directly from the Hugging Face Hub, builds the corresponding feature graph locally for the current date using a 2-year lookback window (`period="2y"`), and instantly outputs the dual forecast to the console.
+* Operates token-free: streams the latest verified model weights directly from the Hugging Face Hub, builds the corresponding feature graph locally for the current date using a 2-year lookback window (`period="2y"`), and instantly outputs the triple forecast to the console: **1d, 5d, and 20d**.
 
 ---
 
-## 📊 Input Feature Matrix (16 Feature Columns)
+## 📊 Input Feature Matrix (20 Feature Columns)
 
 The model utilizes a balanced blend of distinct feature categories:
 
@@ -62,11 +62,15 @@ The model utilizes a balanced blend of distinct feature categories:
 | **Calendar-Based** | `Day_of_Week` | Day of the week index to capture "Friday profit-taking" patterns |
 | **Volume Analytics**| `Volume_Ratio` | Volume spike tracking (current volume vs. 15-day average) |
 | **Macro Context** | `SP500_Return`, `VIX_Close` | Benchmark S&P 500 returns and Wall Street implied volatility index |
-| **Momentum** | `RSI_14` | Relative Strength Index to identify overbought/oversold regions |
+| **Momentum & Shocks**| `RSI_14` | Relative Strength Index to identify overbought/oversold regions |
 | | `Distance_to_MA200` | Price deviation from the global long-term trend (200-day SMA) |
+| | `ATR_Ratio` | Normalized price shock indicator (True Range / ATR_14) |
 | **Fundamentals** | `Earnings_Season` | Corporate earnings season flag (active during Jan, Apr, Jul, Oct) |
 | | `PE_Ratio`, `PS_Ratio` | Dynamic daily Price-to-Earnings and Price-to-Sales multipliers |
 | | `Revenue_Growth` | Business scaling speed based on the latest quarterly reports |
+| | `Analyst_Upside` | Wall Street consensus upside potential ((targetMeanPrice - Close) / Close) |
+| | `PE_Expansion` | Forward earnings growth expansion multiplier (forwardPE / trailingPE) |
+| | `Analyst_Score` | Wall Street consensus rating score (recommendationMean from 1.0 to 5.0) |
 
 ---
 
