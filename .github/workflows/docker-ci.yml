@@ -58,17 +58,13 @@ jobs:
         echo "📡 1. Запускаємо перевірку збору даних для: $TARGET_TICKERS"
         docker run --rm \
           -e STOCK_TICKER="$TARGET_TICKERS" \
-          -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
-          -e HF_REPO="nadtoka/predictive-stock-dataset" \
           -v $(pwd)/test_data:/app/data \
           test-image:local python fetch_data.py
           
         echo "🏗️ 2. Запускаємо перевірку тренування моделей та ШІ-Арбітра для: $TARGET_TICKERS"
         docker run --rm \
           -e STOCK_TICKER="$TARGET_TICKERS" \
-          -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
           -e HF_REPO="nadtoka/predictive-stock-dataset" \
-          -e HF_MODEL_REPO="nadtoka/predictive-stock-models" \
           -v $(pwd)/test_data:/app/data \
           -v $(pwd)/test_models:/app/models \
           test-image:local python train.py

@@ -169,24 +169,34 @@ def run_arbiter():
             "n": n_eval,
         }
 
-    # 3. Свіжі прогнози на сьогодні (беремо тільки найсвіжішу дату прогнозу)
-    max_date_rf = str(df_pred_rf["date"].max()) if not df_pred_rf.empty and "date" in df_pred_rf.columns else ""
-    max_date_xgb = str(df_pred_xgb["date"].max()) if not df_pred_xgb.empty and "date" in df_pred_xgb.columns else ""
-    report_date = max(max_date_rf, max_date_xgb)
-
+    # 3. Свіжі прогнози на сьогодні (беремо останній запис по кожному тікеру індивідуально)
     latest_rf = {}
     if not df_pred_rf.empty and "ticker" in df_pred_rf.columns:
-        sub_rf = df_pred_rf[df_pred_rf["date"].astype(str) == max_date_rf] if max_date_rf else df_pred_rf
-        for _, r in sub_rf.sort_values("date").groupby("ticker").tail(1).iterrows():
+        for _, r in df_pred_rf.sort_values("date").groupby("ticker").tail(1).iterrows():
             latest_rf[str(r["ticker"])] = r
 
     latest_xgb = {}
     if not df_pred_xgb.empty and "ticker" in df_pred_xgb.columns:
-        sub_xgb = df_pred_xgb[df_pred_xgb["date"].astype(str) == max_date_xgb] if max_date_xgb else df_pred_xgb
-        for _, r in sub_xgb.sort_values("date").groupby("ticker").tail(1).iterrows():
+        for _, r in df_pred_xgb.sort_values("date").groupby("ticker").tail(1).iterrows():
             latest_xgb[str(r["ticker"])] = r
 
+    # Якщо у файлі є одиничні тестові рядки новішої дати (наприклад, CI smoke test на 1-3 акції),
+    # синхронізуємо по даті, де присутні обидві моделі для цього тікера
+    rf_by_date_ticker = {}
+    if not df_pred_rf.empty and "ticker" in df_pred_rf.columns:
+        for _, r in df_pred_rf.iterrows():
+            rf_by_date_ticker[(str(r["date"]), str(r["ticker"]))] = r
+
+    xgb_by_date_ticker = {}
+    if not df_pred_xgb.empty and "ticker" in df_pred_xgb.columns:
+        for _, r in df_pred_xgb.iterrows():
+            xgb_by_date_ticker[(str(r["date"]), str(r["ticker"]))] = r
+
     active_tickers = filter_tickers if filter_tickers else sorted(set(latest_rf.keys()) | set(latest_xgb.keys()))
+
+    # Визначаємо основну дату звіту (мода/найчастіша остання дата серед усіх тікерів)
+    all_last_dates = [str(r["date"]) for r in latest_xgb.values()] + [str(r["date"]) for r in latest_rf.values()]
+    report_date = max(set(all_last_dates), key=all_last_dates.count) if all_last_dates else ""
 
     tg = f"⚖️ *ШІ-АРБІТР & ДАЙДЖЕСТ РИНКУ* `{report_date}`\n"
     tg += "━━━━━━━━━━━━━━━━━━━━\n"
@@ -246,13 +256,21 @@ def run_arbiter():
         if r_rf is None and r_xgb is None:
             continue
 
-        # Якщо по тікеру є обидві моделі, але одна з них має старішу дату (наприклад, локальний тест підмножини),
-        # використовуємо лише актуальну дату або поточну ціну свірішого запису
+        # Якщо в одній моделі дата новіша (наприклад, CI smoke test), пробуємо знайти пару на спільну дату
         if r_rf is not None and r_xgb is not None and str(r_rf["date"]) != str(r_xgb["date"]):
-            if str(r_rf["date"]) > str(r_xgb["date"]):
+            common_d = min(str(r_rf["date"]), str(r_xgb["date"]))
+            if (common_d, t) in rf_by_date_ticker and (common_d, t) in xgb_by_date_ticker:
+                r_rf = rf_by_date_ticker[(common_d, t)]
+                r_xgb = xgb_by_date_ticker[(common_d, t)]
+            elif str(r_rf["date"]) > str(r_xgb["date"]):
                 r_xgb = None
             else:
                 r_rf = None
+
+        # Відсікаємо старі архівні тікери (наприклад, DJT чи QQQM з літа), яких більше немає в поточному тижні
+        rec_date = str(r_rf["date"]) if r_rf is not None else str(r_xgb["date"])
+        if report_date and rec_date < report_date and not filter_tickers:
+            continue
 
         cur = float(r_rf["current_price"]) if r_rf is not None else float(r_xgb["current_price"])
         st = ticker_stats.get(
