@@ -1,7 +1,7 @@
 import os
 import warnings
 import pandas as pd
-from features import send_telegram_report
+from features import send_telegram_report, load_earnings_calendar, load_macro_context
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -303,10 +303,24 @@ def run_arbiter():
         dir_icon = "🟢▲" if pct_1d > 0 else "🔴▼"
         agree_tag = "🤝" if agree_1d else "⚔️"
 
+        # Перевіряємо, чи є найближчим часом квартальний звіт (Earnings Call) у локальному кеші
+        earn_tag = ""
+        ed = load_earnings_calendar(t, "data")
+        if ed is not None and not ed.empty:
+            try:
+                now_ts = pd.Timestamp.now(tz="UTC").normalize()
+                future_ed = ed.index[ed.index >= now_ts]
+                if len(future_ed) > 0:
+                    days_left = int((future_ed.min() - now_ts).days)
+                    if 0 <= days_left <= 7:
+                        earn_tag = f" 📅Звіт:{days_left}д!"
+            except Exception:
+                pass
+
         line = (
             f"{dir_icon} *{t}* `${cur:.2f}` → 1d:`{pct_1d:+.1f}%` (${ens_1d:.2f}) | "
             f"5d:`{pct_5d:+.1f}%` | 20d:`{pct_20d:+.1f}%` "
-            f"[{agree_tag}{st['winner']} WR:{st['best_wr']:.0f}%]"
+            f"[{agree_tag}{st['winner']} WR:{st['best_wr']:.0f}%]{earn_tag}"
         )
 
         if agree_1d and st["best_wr"] >= 60.0 and st["n"] >= 5:

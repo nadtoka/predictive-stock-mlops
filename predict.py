@@ -42,7 +42,35 @@ def prepare_features_for_prediction(ticker):
     sp500_df = yf.Ticker("^GSPC").history(period="2y")
     vix_df = yf.Ticker("^VIX").history(period="2y")
 
-    df = build_features(df_raw, sp500_df=sp500_df, vix_df=vix_df)
+    try:
+        vxn_df = yf.Ticker("^VXN").history(period="2y")
+    except Exception:
+        vxn_df = None
+
+    try:
+        tnx_df = yf.Ticker("^TNX").history(period="2y")
+    except Exception:
+        tnx_df = None
+
+    try:
+        soxx_df = yf.Ticker("SOXX").history(period="2y")
+    except Exception:
+        soxx_df = None
+
+    try:
+        earnings_df = stock.get_earnings_dates(limit=20)
+    except Exception:
+        earnings_df = None
+
+    df = build_features(
+        df_raw,
+        sp500_df=sp500_df,
+        vix_df=vix_df,
+        vxn_df=vxn_df,
+        tnx_df=tnx_df,
+        soxx_df=soxx_df,
+        earnings_df=earnings_df,
+    )
     df_latest = df.dropna(subset=FEATURE_COLS)
 
     if df_latest.empty or len(df_latest) < 25:

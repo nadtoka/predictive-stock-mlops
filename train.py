@@ -9,6 +9,8 @@ from huggingface_hub import HfApi
 from features import (
     FEATURE_COLS,
     build_features,
+    load_macro_context,
+    load_earnings_calendar,
     calculate_ticker_metrics,
     apply_bias_correction,
     send_telegram_report,
@@ -42,11 +44,7 @@ def train_and_upload():
         except Exception as e:
             print(f"ℹ️ Не вдалося завантажити evaluation_history.csv (працюємо без компенсації): {e}")
 
-    sp500_path = "data/SP500_history.csv"
-    sp500_df = pd.read_csv(sp500_path, index_col=0, parse_dates=True) if os.path.exists(sp500_path) else None
-
-    vix_path = "data/VIX_history.csv"
-    vix_df = pd.read_csv(vix_path, index_col=0, parse_dates=True) if os.path.exists(vix_path) else None
+    macro = load_macro_context("data")
 
     tg_report = "🌲 *RANDOM FOREST (v3.3 Stationary Features)*\n"
     tg_report += "━━━━━━━━━━━━━━━━\n\n"
@@ -66,7 +64,16 @@ def train_and_upload():
             print(f"⚠️ Для {ticker} недостатньо історії ({len(df_raw)} рядків, потрібно >= 35). Пропускаємо.")
             continue
 
-        df = build_features(df_raw, sp500_df=sp500_df, vix_df=vix_df)
+        earnings_df = load_earnings_calendar(ticker, "data")
+        df = build_features(
+            df_raw,
+            sp500_df=macro.get("sp500"),
+            vix_df=macro.get("vix"),
+            vxn_df=macro.get("vxn"),
+            tnx_df=macro.get("tnx"),
+            soxx_df=macro.get("soxx"),
+            earnings_df=earnings_df,
+        )
         df = df.dropna(subset=FEATURE_COLS)
         if df.empty or len(df) < 25:
             print(f"❌ Недостатньо валідних рядків після розрахунку індикаторів для {ticker}. Пропускаємо.")

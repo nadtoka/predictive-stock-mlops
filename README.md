@@ -6,7 +6,7 @@
 
 An end-to-end MLOps project for automated financial data ingestion, daily model retraining (Continuous Training) optimized for each individual asset, artifact versioning in the Hugging Face Hub, and automated operational monitoring via Telegram.
 
-In version **v3.3**, the system introduces an **AI Arbiter (`arbiter.py`)** that evaluates Random Forest vs. XGBoost head-to-head, computes a Win-Rate-weighted ensemble forecast, and delivers a single compact Telegram digest. It also upgrades the feature pipeline (`features.py`) to **24 fully stationary (relative) indicators** with a 20-day validation embargo buffer to eliminate look-ahead leakage.
+In version **v3.3**, the system introduces an **AI Arbiter (`arbiter.py`)** that evaluates Random Forest vs. XGBoost head-to-head, computes a Win-Rate-weighted ensemble forecast, and delivers a single compact Telegram digest. It also upgrades the feature pipeline (`features.py`) to **33 fully stationary (relative) indicators** incorporating deep volatility triggers (`^VXN`, `^TNX`, `SOXX`, Garman-Klass volatility, Volatility Squeeze, and exact earnings proximity & EPS surprise radar) with a 20-day validation embargo buffer to eliminate look-ahead leakage.
 
 ---
 
@@ -16,7 +16,8 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 
 ### 1. Data Ingestion Engine (`fetch_data.py`)
 * Nightly fetches a **5-year rolling window** of historical market data via the Yahoo Finance API for a target list of equities.
-* **Macro Context:** Concurrently ingests global market indicators: the benchmark US economic index **S&P 500 (`^GSPC`)** and the Wall Street fear index **CBOE Volatility Index (`^VIX`)**.
+* **Earnings Calendar & Surprise Radar:** Automatically collects historical and upcoming corporate earnings dates and EPS surprise metrics (`data/{ticker}_earnings.csv`).
+* **Macro & Sector Volatility Context:** Concurrently ingests global market indicators: **S&P 500 (`^GSPC`)**, **CBOE VIX (`^VIX`)**, **Nasdaq-100 Volatility (`^VXN`)**, **US 10-Year Treasury Yield (`^TNX`)**, and the **Semiconductor ETF (`SOXX`)**.
 * Automatically synchronizes and versions raw datasets (`.csv`) in the **Hugging Face Datasets** registry.
 
 ### 2. Continuous Training Engine (`train.py` and `train_xgb.py`)
@@ -53,7 +54,7 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 
 ---
 
-## 📊 Input Feature Matrix (24 Stationary Feature Columns in `features.py`)
+## 📊 Input Feature Matrix (33 Stationary Feature Columns in `features.py`)
 
 The models use a strictly stationary, relative indicator stack free from raw price scale bias and look-ahead leakage:
 
@@ -62,11 +63,19 @@ The models use a strictly stationary, relative indicator stack free from raw pri
 | **Return Momentum** | `Daily_Return`, `Return_5d`, `Return_20d` | Relative percentage returns over 1, 5, and 20 sessions |
 | **Trend Distance** | `Distance_to_MA5`, `Distance_to_MA20` | Relative price deviation from weekly and monthly SMAs |
 | | `Distance_to_MA50`, `Distance_to_MA200` | Relative price deviation from quarterly and annual SMAs |
-| **Volatility** | `Volatility_5`, `Volatility_20` | 5-day and 20-day rolling return standard deviation |
+| **Deep Volatility** | `Volatility_5`, `Volatility_20` | 5-day and 20-day rolling return standard deviation |
+| | `GK_Volatility` | Garman-Klass OHLC historical volatility estimator |
+| | `Volatility_Squeeze` | Bollinger Band width vs Keltner ATR channel ratio (breakout spring detector) |
 | **Session Structure** | `Intraday_Return`, `Day_Range`, `Gap` | Intra-session move, High/Low range, and overnight opening gap |
-| **Calendar & Volume** | `Day_of_Week`, `Earnings_Season`, `Volume_Ratio` | Weekday index, earnings month flag, and volume vs 15-day average |
-| **Macro & Alpha** | `SP500_Return`, `Relative_Return_1d` | Benchmark S&P 500 return and stock-specific daily alpha |
-| | `VIX_Close`, `VIX_Change` | Wall Street fear index level and daily percentage change |
+| **Calendar & Earnings** | `Day_of_Week`, `Earnings_Season` | Weekday index and corporate earnings season month flag |
+| | `Earnings_Proximity` | Proximity radar to exact earnings date (Pre-earnings run-up / Post-earnings crush) |
+| | `Last_EPS_Surprise` | Most recent reported quarterly EPS surprise percentage |
+| **Volume & Alpha** | `Volume_Ratio` | Volume spike relative to 15-day average |
+| | `SP500_Return`, `Relative_Return_1d` | Benchmark S&P 500 return and stock-specific daily alpha |
+| | `SOXX_Return`, `Relative_to_SOXX` | Semiconductor sector return (`SOXX`) and stock alpha vs chipmakers |
+| **Macro Fear Triggers** | `VIX_Close`, `VIX_Change` | Wall Street S&P 500 fear index level and daily change |
+| | `VXN_Close`, `VXN_VIX_Spread` | Nasdaq-100 implied volatility (`^VXN`) and tech-fear spread over VIX |
+| | `TNX_Change` | Daily yield momentum of US 10-Year Treasury bonds (`^TNX`) |
 | **Oscillators & Shocks**| `RSI_14`, `MACD_Hist`, `BB_Position` | 14-day RSI, price-normalized MACD histogram, and Bollinger Band Z-score |
 | | `ATR_Ratio`, `ATR_Pct` | True Range shock ratio (TR / ATR_14) and ATR as % of price |
 
@@ -162,8 +171,8 @@ predictive-stock-mlops/
 ├── models/                 # Local serialized model binaries (Git ignored)
 ├── models_xgb/             # Local cached XGBoost model binaries (Git ignored)
 ├── Dockerfile              # Instructions for building the immutable runtime
-├── features.py             # Shared 24-stationary-feature pipeline, metrics & Telegram engine
-├── fetch_data.py           # Data Ingestion module (Equities + S&P 500 + VIX)
+├── features.py             # Shared 33-stationary-feature pipeline, metrics & Telegram engine
+├── fetch_data.py           # Data Ingestion module (Equities + Earnings + S&P 500 + VIX + VXN + TNX + SOXX)
 ├── run_pipeline.sh         # Main orchestration script (Fetch -> Evaluate -> Train -> Arbiter)
 ├── train.py                # Random Forest A-contour, 20-day validation embargo, HF sync
 ├── train_xgb.py            # XGBoost B-contour, multi-output training, HF sync

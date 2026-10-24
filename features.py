@@ -1,14 +1,15 @@
 import os
 import warnings
+import numpy as np
 import pandas as pd
 import yfinance as yf
 from curl_cffi import requests
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-# Список стаціонарних (відносних) ознак без сирих цін/об'ємів та без витоку майбутнього (look-ahead bias).
-# Всі фічі нормалізовані у відсотках або коефіцієнтах, щоб дерева рішень (Random Forest та XGBoost)
-# однаково точно працювали як на історії 5-річної давнини, так і на поточних максимумах ціни.
+# Список 32 стаціонарних (відносних) ознак без сирих цін/об'ємів та без витоку майбутнього (look-ahead bias).
+# Включає технічні моментуми, макро-тригери ліквідності (^VXN, ^TNX, SOXX), структурну волатильність
+# (Garman-Klass, Volatility Squeeze) та точний радар квартальних звітів (Earnings Proximity & Surprise).
 FEATURE_COLS = [
     "Daily_Return",
     "Return_5d",
@@ -19,6 +20,8 @@ FEATURE_COLS = [
     "Distance_to_MA200",
     "Volatility_5",
     "Volatility_20",
+    "GK_Volatility",
+    "Volatility_Squeeze",
     "Intraday_Return",
     "Day_Range",
     "Gap",
@@ -28,12 +31,19 @@ FEATURE_COLS = [
     "Relative_Return_1d",
     "VIX_Close",
     "VIX_Change",
+    "VXN_Close",
+    "VXN_VIX_Spread",
+    "TNX_Change",
+    "SOXX_Return",
+    "Relative_to_SOXX",
     "RSI_14",
     "MACD_Hist",
     "BB_Position",
     "ATR_Ratio",
     "ATR_Pct",
     "Earnings_Season",
+    "Earnings_Proximity",
+    "Last_EPS_Surprise",
 ]
 
 
@@ -83,15 +93,130 @@ def send_telegram_report(text, max_len=3800):
             print(f"❌ Не вдалося зв'язатися з Telegram: {e}")
 
 
-def build_features(df, sp500_df=None, vix_df=None):
+def load_macro_context(data_dir="data"):
+    """Завантажує всі макро-індикатори з локального кешу data/ (S&P 500, VIX, VXN, TNX, SOXX)."""
+    macro = {}
+    mapping = {
+        "sp500": "SP500_history.csv",
+        "vix": "VIX_history.csv",
+        "vxn": "VXN_history.csv",
+        "tnx": "TNX_history.csv",
+        "soxx": "SOXX_history.csv",
+    }
+    for key, filename in mapping.items():
+        path = os.path.join(data_dir, filename)
+        if os.path.exists(path):
+            try:
+                m_df = pd.read_csv(path, index_col=0, parse_dates=True)
+                if not m_df.empty and "Close" in m_df:
+                    m_df.index = pd.to_datetime(m_df.index, utc=True).normalize()
+                    macro[key] = m_df
+            except Exception as e:
+                print(f"⚠️ Помилка читання макро-файлу {path}: {e}")
+    return macro
+
+
+def load_earnings_calendar(ticker, data_dir="data"):
+    """Завантажує календар квартальних звітів для тікера з локального кешу або порожній DataFrame."""
+    path = os.path.join(data_dir, f"{ticker}_earnings.csv")
+    if os.path.exists(path):
+        try:
+            ed = pd.read_csv(path, index_col=0, parse_dates=True)
+            if not ed.empty:
+                ed.index = pd.to_datetime(ed.index, utc=True).normalize()
+                return ed
+        except Exception:
+            pass
+    return None
+
+
+def _apply_earnings_features(df, earnings_df):
     """
-    Єдиний конвеєр розрахунку 24 стаціонарних технічних, макро- та календарних ознак.
+    Розраховує точні фактори волатильності навколо квартальних звітів (Earnings Call) без витоку майбутнього:
+    - Earnings_Proximity: 1.0 у день звіту або за 1-5 торгових днів ДО нього (pre-earnings volatility run-up),
+      -1.0 у перші 2 дні ПІСЛЯ звіту (post-earnings drift / IV crush), 0.0 в інші дні.
+    - Last_EPS_Surprise: останній відомий сюрприз прибутку (Surprise(%)) на момент конкретної дати (через ffill).
+    """
+    df["Earnings_Proximity"] = 0.0
+    df["Last_EPS_Surprise"] = 0.0
+
+    if earnings_df is None or earnings_df.empty:
+        return df
+
+    try:
+        ed = earnings_df.copy()
+        ed.index = pd.to_datetime(ed.index, utc=True).normalize()
+        ed = ed[~ed.index.duplicated(keep="first")].sort_index()
+
+        # 1. Історичний сюрприз EPS (відомий ТІЛЬКИ після дати звіту -> без look-ahead bias)
+        surprise_col = None
+        for col in ed.columns:
+            if "Surprise" in str(col):
+                surprise_col = col
+                break
+
+        if surprise_col is not None:
+            surp = pd.to_numeric(ed[surprise_col], errors="coerce").dropna() / 100.0
+            if not surp.empty:
+                # Reindex по об'єднаній осі та forward-fill, щоб кожен день знав лише МИНУЛИЙ звіт
+                combined_idx = df.index.union(surp.index).sort_values()
+                surp_aligned = surp.reindex(combined_idx).ffill().reindex(df.index).fillna(0.0)
+                df["Last_EPS_Surprise"] = surp_aligned.clip(-2.0, 2.0)
+
+        # 2. Близькість до дати звіту (Earnings_Proximity)
+        event_dates = ed.index.values
+        if len(event_dates) > 0:
+            idx_vals = df.index.values
+            # Для кожної дати знаходимо найближчий майбутній звіт та останній минулий звіт
+            pos = np.searchsorted(event_dates, idx_vals)
+
+            # Дні до наступного звіту (в календарних днях: <= 7 днів відповідає ~5 торговим сесіям)
+            valid_next = pos < len(event_dates)
+            days_to_next = np.full(len(idx_vals), 999.0)
+            days_to_next[valid_next] = (
+                (event_dates[pos[valid_next]] - idx_vals[valid_next]) / np.timedelta64(1, "D")
+            )
+
+            # Дні після минулого звіту
+            valid_prev = pos > 0
+            days_since_prev = np.full(len(idx_vals), 999.0)
+            days_since_prev[valid_prev] = (
+                (idx_vals[valid_prev] - event_dates[pos[valid_prev] - 1]) / np.timedelta64(1, "D")
+            )
+
+            prox = np.zeros(len(idx_vals), dtype=float)
+            # Pre-earnings run-up: чим ближче до звіту (від 7 до 0 днів), тим вищий сигнал (від 0.3 до 1.0)
+            pre_mask = (days_to_next >= 0) & (days_to_next <= 7)
+            prox[pre_mask] = np.round(1.0 - (days_to_next[pre_mask] / 10.0), 2)
+
+            # Post-earnings reaction (1-3 календарні дні після звіту): маркуємо як -0.5 (фаза IV crush / переоцінки)
+            post_mask = (~pre_mask) & (days_since_prev >= 1) & (days_since_prev <= 3)
+            prox[post_mask] = -0.5
+
+            df["Earnings_Proximity"] = prox
+    except Exception as e:
+        print(f"ℹ️ Помилка обробки календаря звітів: {e}")
+
+    return df
+
+
+def build_features(
+    df,
+    sp500_df=None,
+    vix_df=None,
+    vxn_df=None,
+    tnx_df=None,
+    soxx_df=None,
+    earnings_df=None,
+):
+    """
+    Єдиний конвеєр розрахунку 33 стаціонарних технічних, макро-, волатильнісних та звітних ознак.
     Використовує еластичні ковзні вікна (min_periods=1) для підтримки молодих IPO-активів.
     """
     df = df.copy()
     df.index = pd.to_datetime(df.index, utc=True).normalize()
 
-    # Макро-контекст: S&P 500
+    # 1. Макро-контекст: S&P 500 (^GSPC)
     if sp500_df is not None and not sp500_df.empty and "Close" in sp500_df:
         sp_copy = sp500_df.copy()
         sp_copy.index = pd.to_datetime(sp_copy.index, utc=True).normalize()
@@ -100,7 +225,7 @@ def build_features(df, sp500_df=None, vix_df=None):
     elif "SP500_Return" not in df.columns:
         df["SP500_Return"] = 0.0
 
-    # Макро-контекст: VIX
+    # 2. Макро-контекст: VIX (^VIX)
     if vix_df is not None and not vix_df.empty and "Close" in vix_df:
         vx_copy = vix_df.copy()
         vx_copy.index = pd.to_datetime(vx_copy.index, utc=True).normalize()
@@ -108,10 +233,44 @@ def build_features(df, sp500_df=None, vix_df=None):
     elif "VIX_Close" not in df.columns:
         df["VIX_Close"] = 15.0
 
-    # Базові доходності на різних часових масштабах
+    # 3. Макро-волатильність тех-сектору: Nasdaq Volatility (^VXN)
+    if vxn_df is not None and not vxn_df.empty and "Close" in vxn_df:
+        vxn_copy = vxn_df.copy()
+        vxn_copy.index = pd.to_datetime(vxn_copy.index, utc=True).normalize()
+        df["VXN_Close"] = vxn_copy["Close"].reindex(df.index).ffill().fillna(df["VIX_Close"] * 1.2)
+    else:
+        df["VXN_Close"] = df["VIX_Close"] * 1.2
+
+    # Спред паніки Nasdaq проти широкого ринку (коли тех-сектор штормить сильніше за S&P 500)
+    df["VXN_VIX_Spread"] = ((df["VXN_Close"] - df["VIX_Close"]) / df["VIX_Close"].replace(0, 1e-9)).fillna(0.0)
+
+    # 4. Макро-тригер вартості грошей: US 10-Year Treasury Yield (^TNX)
+    if tnx_df is not None and not tnx_df.empty and "Close" in tnx_df:
+        tnx_copy = tnx_df.copy()
+        tnx_copy.index = pd.to_datetime(tnx_copy.index, utc=True).normalize()
+        tnx_ret = tnx_copy["Close"].pct_change(fill_method=None)
+        df["TNX_Change"] = tnx_ret.reindex(df.index).ffill().fillna(0.0)
+    else:
+        df["TNX_Change"] = 0.0
+
+    # 5. Індекс напівпровідників та ШІ-чіпів: SOXX ETF
+    if soxx_df is not None and not soxx_df.empty and "Close" in soxx_df:
+        soxx_copy = soxx_df.copy()
+        soxx_copy.index = pd.to_datetime(soxx_copy.index, utc=True).normalize()
+        soxx_ret = soxx_copy["Close"].pct_change(fill_method=None)
+        df["SOXX_Return"] = soxx_ret.reindex(df.index).ffill().fillna(df["SP500_Return"])
+    else:
+        df["SOXX_Return"] = df["SP500_Return"]
+
+    # Базові доходності акції на різних часових масштабах
     df["Daily_Return"] = df["Close"].pct_change(fill_method=None)
     df["Return_5d"] = df["Close"].pct_change(periods=5, fill_method=None).fillna(df["Daily_Return"])
     df["Return_20d"] = df["Close"].pct_change(periods=20, fill_method=None).fillna(df["Return_5d"])
+
+    # Відносна сила акції проти S&P 500 та проти сектору напівпровідників SOXX
+    df["Relative_Return_1d"] = (df["Daily_Return"] - df["SP500_Return"]).fillna(0.0)
+    df["Relative_to_SOXX"] = (df["Daily_Return"] - df["SOXX_Return"]).fillna(0.0)
+    df["VIX_Change"] = df["VIX_Close"].pct_change(fill_method=None).fillna(0.0)
 
     # Відносні відстані до ковзних середніх (замість сирих цін MA_5, MA_20, Close)
     ma_5 = df["Close"].rolling(window=5, min_periods=1).mean()
@@ -124,9 +283,15 @@ def build_features(df, sp500_df=None, vix_df=None):
     df["Distance_to_MA50"] = ((df["Close"] - ma_50) / ma_50.replace(0, 1e-9)).fillna(0.0)
     df["Distance_to_MA200"] = ((df["Close"] - ma_200) / ma_200.replace(0, 1e-9)).fillna(0.0)
 
-    # Волатильність (короткострокова та місячна)
+    # Волатильність закриття (короткострокова та місячна)
     df["Volatility_5"] = df["Daily_Return"].rolling(window=5, min_periods=1).std().fillna(0.0)
     df["Volatility_20"] = df["Daily_Return"].rolling(window=20, min_periods=1).std().fillna(df["Volatility_5"])
+
+    # 6. Garman-Klass Historical Volatility (враховує High/Low/Open/Close всередині дня — у 7 разів чутливіша за std)
+    log_hl = np.log((df["High"] / df["Low"].replace(0, 1e-9)).clip(lower=1.0))
+    log_co = np.log((df["Close"] / df["Open"].replace(0, 1e-9)).clip(lower=1e-9))
+    gk_var = (0.5 * (log_hl ** 2) - (2.0 * np.log(2.0) - 1.0) * (log_co ** 2)).clip(lower=0.0)
+    df["GK_Volatility"] = np.sqrt(gk_var.rolling(window=10, min_periods=1).mean()).fillna(df["Volatility_5"])
 
     # Внутрішньоденна структура сесії та нічні гепи
     df["Intraday_Return"] = ((df["Close"] - df["Open"]) / df["Open"].replace(0, 1e-9)).fillna(0.0)
@@ -139,13 +304,10 @@ def build_features(df, sp500_df=None, vix_df=None):
     vol_ma15 = df["Volume"].rolling(window=15, min_periods=1).mean()
     df["Volume_Ratio"] = (df["Volume"] / vol_ma15.replace(0, 1e-9)).fillna(1.0)
 
-    # Відносна сила акції проти ринку (Alpha) та динаміка страху VIX
-    df["Relative_Return_1d"] = (df["Daily_Return"] - df["SP500_Return"]).fillna(0.0)
-    df["VIX_Change"] = df["VIX_Close"].pct_change(fill_method=None).fillna(0.0)
-
-    # Сезон квартальних звітів
+    # Сезон квартальних звітів + Точний календар звітів компанії
     df["Month"] = df.index.month
     df["Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
+    df = _apply_earnings_features(df, earnings_df)
 
     # ATR (Average True Range) — шоковий імпульс та відносна амплітуда
     tr1 = df["High"] - df["Low"]
@@ -155,6 +317,16 @@ def build_features(df, sp500_df=None, vix_df=None):
     atr_14 = tr.rolling(window=14, min_periods=1).mean()
     df["ATR_Ratio"] = (tr / atr_14.replace(0, 1e-9)).fillna(1.0)
     df["ATR_Pct"] = (atr_14 / df["Close"].replace(0, 1e-9)).fillna(0.0)
+
+    # 7. Volatility Squeeze (Bollinger Band Width vs Keltner ATR Channel):
+    # Коли < 1.0, смуги Боллінджера зайшли всередину каналу Кельтнера (пружина стиснулась перед вибухом ціни!)
+    bb_std = df["Close"].rolling(window=20, min_periods=2).std().fillna(0.0)
+    bb_width_pct = (4.0 * bb_std) / ma_20.replace(0, 1e-9)
+    keltner_width_pct = (3.0 * atr_14) / ma_20.replace(0, 1e-9)
+    df["Volatility_Squeeze"] = (bb_width_pct / keltner_width_pct.replace(0, 1e-9)).clip(0.0, 5.0).fillna(1.0)
+
+    # Позиція ціни всередині смуг Боллінджера (Bollinger Band Z-Score)
+    df["BB_Position"] = ((df["Close"] - ma_20) / (2.0 * bb_std.replace(0, 1e-9))).clip(-3.0, 3.0).fillna(0.0)
 
     # RSI 14
     delta = df["Close"].diff()
@@ -170,10 +342,6 @@ def build_features(df, sp500_df=None, vix_df=None):
     macd_sig = macd_pct.ewm(span=9, adjust=False).mean()
     df["MACD_Hist"] = (macd_pct - macd_sig).fillna(0.0)
 
-    # Позиція ціни всередині смуг Боллінджера (Bollinger Band Z-Score)
-    bb_std = df["Close"].rolling(window=20, min_periods=2).std().fillna(0.0)
-    df["BB_Position"] = ((df["Close"] - ma_20) / (2.0 * bb_std.replace(0, 1e-9))).clip(-3.0, 3.0).fillna(0.0)
-
     return df
 
 
@@ -181,9 +349,6 @@ def calculate_ticker_metrics(df_eval, current_ticker):
     """
     Уніфікований розрахунок метрик точності та відносного зсуву (bias_pct) для тікера
     на основі останніх 14 календарних днів.
-    Використовує однакові чесні правила як для Random Forest, так і для XGBoost:
-    якщо за останні 14 днів менше 5 свіжих перевірок — компенсація вимикається (bias = 0),
-    щоб не тягнути застарілий хвіст із минулого місяця.
     """
     metrics = {
         "1d": {"win_rate": 50.0, "bias": 0.0, "bias_pct": 0.0, "mae_pct": 0.0, "count": 0},
