@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Створюємо папки під дані та моделі всередині контейнера
-RUN mkdir -p data models
+RUN mkdir -p data models models_xgb
 
 # За замовчуванням запускаємо збір даних, але це можна перевизначити при старті контейнера
 CMD ["python", "fetch_data.py"]

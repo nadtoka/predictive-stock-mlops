@@ -2,125 +2,19 @@ import os
 import warnings
 import joblib
 import pandas as pd
-import yfinance as yf
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
-from curl_cffi import requests
 from huggingface_hub import HfApi
 
-# Глушимо FutureWarning від Pandas/yfinance
-warnings.simplefilter(action='ignore', category=FutureWarning)
+from features import (
+    FEATURE_COLS,
+    build_features,
+    calculate_ticker_metrics,
+    apply_bias_correction,
+    send_telegram_report,
+)
 
-
-def send_telegram_report(text):
-    """Надсилає звіт в Телеграм із розбиттям на безпечні чанки за рядками"""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    if not token or not chat_id:
-        print("ℹ️ TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не знайдені. Пропускаємо сповіщення.")
-        return
-
-    MAX_LEN = 3800
-    chunks = []
-    current_chunk = ""
-
-    for line in text.split("\n"):
-        if len(current_chunk) + len(line) + 1 > MAX_LEN:
-            chunks.append(current_chunk.strip())
-            current_chunk = line + "\n"
-        else:
-            current_chunk += line + "\n"
-
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    for idx, chunk in enumerate(chunks, 1):
-        if not chunk:
-            continue
-        payload = {
-            "chat_id": chat_id,
-            "text": chunk,
-            "parse_mode": "Markdown",
-        }
-        try:
-            res = requests.post(url, json=payload, timeout=15)
-            if res.status_code == 200:
-                print(f"🚀 Частину {idx}/{len(chunks)} успішно надіслано в Telegram!")
-            else:
-                payload.pop("parse_mode")
-                res_plain = requests.post(url, json=payload, timeout=15)
-                if res_plain.status_code == 200:
-                    print(f"🚀 Частину {idx}/{len(chunks)} надіслано звичайним текстом (fallback)!")
-                else:
-                    print(f"❌ Помилка Telegram API (частина {idx}): {res.text}")
-        except Exception as e:
-            print(f"❌ Не вдалося зв'язатися з Telegram: {e}")
-
-
-def calculate_ticker_metrics(df_eval, current_ticker):
-    """
-    Розрахунок метрик для тікера на основі останніх 14 календарних днів.
-    Якщо в вікні менше 5 свіжих оцінок — не підтягуємо хвіст, а повертаємо нульовий bias.
-    """
-    metrics = {
-        "1d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
-        "5d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
-        "20d": {"win_rate": 50.0, "bias": 0.0, "count": 0},
-    }
-    if df_eval is None or df_eval.empty or "ticker" not in df_eval.columns:
-        return metrics
-
-    df_ticker = df_eval[df_eval["ticker"] == current_ticker].copy()
-    if df_ticker.empty or "target_date" not in df_ticker.columns:
-        return metrics
-
-    df_ticker["target_date"] = pd.to_datetime(df_ticker["target_date"], utc=True).dt.tz_localize(None)
-    now_date = pd.Timestamp.now().tz_localize(None).floor("D")
-    cutoff_date = now_date - pd.Timedelta(days=14)
-
-    for horizon in ["1d", "5d", "20d"]:
-        df_h = df_ticker[df_ticker["horizon"] == horizon].copy()
-        if df_h.empty:
-            continue
-
-        df_h = df_h.sort_values("target_date")
-        df_recent = df_h[df_h["target_date"] >= cutoff_date]
-
-        # Мінімум для включення в динамічну компенсацію — 5 свіжих оцінок.
-        # Не "доповнюємо" вибірку хвостом, якщо даних недостатньо: це знижує якість сигналу.
-        if len(df_recent) < 5:
-            metrics[horizon] = {
-                "win_rate": 50.0,
-                "bias": 0.0,
-                "count": int(len(df_recent)),
-            }
-            continue
-
-        count = len(df_recent)
-        win_rate = 50.0
-        if "direction_correct" in df_recent.columns and not df_recent["direction_correct"].dropna().empty:
-            win_rate = float(df_recent["direction_correct"].mean() * 100)
-
-        bias = 0.0
-        if "actual_price" in df_recent.columns and "predicted_price" in df_recent.columns:
-            diff = df_recent["actual_price"] - df_recent["predicted_price"]
-            if not diff.dropna().empty:
-                bias = float(diff.median())
-
-        if pd.isna(win_rate):
-            win_rate = 50.0
-        if pd.isna(bias):
-            bias = 0.0
-
-        metrics[horizon] = {
-            "win_rate": win_rate,
-            "bias": bias,
-            "count": count,
-        }
-
-    return metrics
+warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
 def train_and_upload():
@@ -130,21 +24,31 @@ def train_and_upload():
     hf_token = os.getenv("HF_TOKEN")
     hf_model_repo = os.getenv("HF_MODEL_REPO")
     hf_repo_inside = os.getenv("HF_REPO")
+    quiet_tg = os.getenv("QUIET_TELEGRAM", "0") == "1"
 
     os.makedirs("models", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
 
-    # 1. 🚀 Завантаження бази оцінки з Hugging Face для Continuous Learning
+    # 1. Завантаження бази оцінки з Hugging Face для Continuous Learning
     df_eval = pd.DataFrame()
     if hf_repo_inside:
         try:
             eval_url = f"https://huggingface.co/datasets/{hf_repo_inside}/raw/main/evaluation_history.csv"
             df_eval = pd.read_csv(eval_url)
+            if not df_eval.empty and "actual_price" in df_eval.columns:
+                df_eval = df_eval.dropna(subset=["actual_price", "mae_pct"])
+                df_eval = df_eval[df_eval["actual_price"] > 0]
             print(f"📋 Завантажено базу оцінювання evaluation_history.csv ({len(df_eval)} рядків).")
         except Exception as e:
             print(f"ℹ️ Не вдалося завантажити evaluation_history.csv (працюємо без компенсації): {e}")
 
-    # Заголовок нашого щонічного звіту
-    tg_report = "📊 КВАНТОВИЙ АНАЛІЗ РИНКУ (v3.1 Continuous Learning)\n"
+    sp500_path = "data/SP500_history.csv"
+    sp500_df = pd.read_csv(sp500_path, index_col=0, parse_dates=True) if os.path.exists(sp500_path) else None
+
+    vix_path = "data/VIX_history.csv"
+    vix_df = pd.read_csv(vix_path, index_col=0, parse_dates=True) if os.path.exists(vix_path) else None
+
+    tg_report = "🌲 *RANDOM FOREST (v3.3 Stationary Features)*\n"
     tg_report += "━━━━━━━━━━━━━━━━\n\n"
 
     daily_predictions = []
@@ -156,229 +60,99 @@ def train_and_upload():
             print(f"⚠️ Файл даних для {ticker} не знайдено. Пропускаємо.")
             continue
 
-        print(f"🧠 Обробка та тренування моделі для {ticker}...")
-        stock = yf.Ticker(ticker)
-        info = {}
-        try:
-            info = stock.info
-        except Exception:
-            info = {}
-        eps = info.get("trailingEps")
-        eps = eps if eps not in (None, 0) else 1
-        rev_per_share = info.get("revenuePerShare")
-        rev_per_share = rev_per_share if rev_per_share not in (None, 0) else 1
-        rev_growth = info.get("revenueGrowth")
-        rev_growth = rev_growth if rev_growth not in (None, 0) else 0
-        target_mean_price = info.get("targetMeanPrice")
-        forward_pe = info.get("forwardPE")
-        trailing_pe = info.get("trailingPE")
-        recommendation_mean = info.get("recommendationMean")
-
-        df = pd.read_csv(data_path, index_col=0, parse_dates=True)
-        if len(df) < 35:
-            print(f"⚠️ Для {ticker} недостатньо історії ({len(df)} рядків, потрібно >= 35). Пропускаємо.")
+        print(f"🧠 Обробка та тренування Random Forest для {ticker}...")
+        df_raw = pd.read_csv(data_path, index_col=0, parse_dates=True)
+        if len(df_raw) < 35:
+            print(f"⚠️ Для {ticker} недостатньо історії ({len(df_raw)} рядків, потрібно >= 35). Пропускаємо.")
             continue
-        df.index = pd.to_datetime(df.index, utc=True).normalize()
 
-        # S&P 500
-        sp500_path = "data/SP500_history.csv"
-        if os.path.exists(sp500_path):
-            sp500_df = pd.read_csv(sp500_path, index_col=0, parse_dates=True)
-            sp500_df.index = pd.to_datetime(sp500_df.index, utc=True).normalize()
-            df["SP500_Return"] = sp500_df["Close"].pct_change(fill_method=None)
-        else:
-            df["SP500_Return"] = 0
-
-        # VIX
-        vix_path = "data/VIX_history.csv"
-        if os.path.exists(vix_path):
-            vix_df = pd.read_csv(vix_path, index_col=0, parse_dates=True)
-            vix_df.index = pd.to_datetime(vix_df.index, utc=True).normalize()
-            df["VIX_Close"] = vix_df["Close"]
-        else:
-            df["VIX_Close"] = 15.0
-
-        # Індикатори (Фічі)
-        df["MA_5"] = df["Close"].rolling(window=5, min_periods=1).mean()
-        df["MA_20"] = df["Close"].rolling(window=20, min_periods=1).mean()
-        df["Daily_Return"] = df["Close"].pct_change(fill_method=None)
-        df["Volatility_5"] = df["Daily_Return"].rolling(window=5, min_periods=1).std().fillna(0)
-
-        df["Intraday_Return"] = (df["Close"] - df["Open"]) / df["Open"]
-        df["Day_Range"] = (df["High"] - df["Low"]) / df["Low"]
-        df["Gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
-
-        df["Day_of_Week"] = df.index.dayofweek
-        df["Volume_MA15"] = df["Volume"].rolling(window=15, min_periods=1).mean()
-        df["Volume_Ratio"] = df["Volume"] / df["Volume_MA15"]
-        df.loc[:, "MA_200"] = df["Close"].rolling(window=200, min_periods=1).mean()
-        df.loc[:, "Distance_to_MA200"] = (df["Close"] - df["MA_200"]) / df["MA_200"]
-        df.loc[:, "Month"] = df.index.month
-        df.loc[:, "Earnings_Season"] = df["Month"].isin([1, 4, 7, 10]).astype(int)
-        df.loc[:, "PE_Ratio"] = df["Close"] / eps
-        df.loc[:, "PS_Ratio"] = df["Close"] / rev_per_share
-        df.loc[:, "Revenue_Growth"] = rev_growth
-        if target_mean_price is not None and target_mean_price > 0:
-            df["Analyst_Upside"] = (target_mean_price - df["Close"]) / df["Close"]
-        else:
-            df["Analyst_Upside"] = 0.0
-
-        if (
-            forward_pe is not None
-            and trailing_pe is not None
-            and forward_pe > 0
-            and trailing_pe > 0
-        ):
-            df["PE_Expansion"] = float(forward_pe / trailing_pe)
-        else:
-            df["PE_Expansion"] = 1.0
-
-        if recommendation_mean is not None and 1.0 <= recommendation_mean <= 5.0:
-            df["Analyst_Score"] = float(recommendation_mean)
-        else:
-            df["Analyst_Score"] = 2.5
-
-        prev_close = df["Close"].shift(1)
-        tr1 = df["High"] - df["Low"]
-        tr2 = (df["High"] - prev_close).abs()
-        tr3 = (df["Low"] - prev_close).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr_14 = tr.rolling(window=14, min_periods=1).mean()
-        df["ATR_Ratio"] = (tr / atr_14.replace(0, 1e-9)).fillna(1.0)
-
-        # RSI
-        delta = df["Close"].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss.replace(0, 1e-9)
-        df["RSI_14"] = 100 - (100 / (1 + rs))
-
-        feature_cols = [
-            "Close", "Volume", "MA_5", "MA_20", "Daily_Return", "Volatility_5",
-            "Intraday_Return", "Day_Range", "Gap", "Day_of_Week", "Volume_Ratio",
-            "SP500_Return", "VIX_Close", "RSI_14", "Distance_to_MA200",
-            "Earnings_Season", "PE_Ratio", "PS_Ratio", "Revenue_Growth", "Analyst_Upside", "PE_Expansion", "Analyst_Score", "ATR_Ratio",
-        ]
-
-        df = df.dropna(subset=feature_cols)
+        df = build_features(df_raw, sp500_df=sp500_df, vix_df=vix_df)
+        df = df.dropna(subset=FEATURE_COLS)
         if df.empty or len(df) < 25:
             print(f"❌ Недостатньо валідних рядків після розрахунку індикаторів для {ticker}. Пропускаємо.")
             continue
 
-        latest_features = df[feature_cols].tail(1).copy()
-        current_price = latest_features["Close"].values[0]
+        latest_features = df[FEATURE_COLS].tail(1).copy()
+        current_price = float(df["Close"].iloc[-1])
+        vix_current = float(df["VIX_Close"].iloc[-1]) if "VIX_Close" in df.columns else 15.0
 
         df["Target_1d"] = df["Close"].pct_change(fill_method=None).shift(-1)
         df["Target_5d"] = df["Close"].pct_change(periods=5, fill_method=None).shift(-5)
         df["Target_20d"] = df["Close"].pct_change(periods=20, fill_method=None).shift(-20)
         df = df.dropna(subset=["Target_1d", "Target_5d", "Target_20d"])
 
-        if df.empty:
-            print(f"❌ Недостатньо даних після створення індикаторів для {ticker}.")
+        if df.empty or len(df) < 20:
+            print(f"❌ Недостатньо даних після створення тарґетів для {ticker}.")
             continue
 
         test_size = max(3, min(20, int(len(df) * 0.15)))
-        train_df = df.iloc[:-test_size]
+        # Embargo gap (буфер 20 сесій між train та test), щоб 20-денний тарґет тренування не заглядав у тест
+        embargo = 20 if len(df) > (test_size + 45) else 0
+        train_end = len(df) - test_size - embargo
+        train_df = df.iloc[:train_end]
         test_df = df.iloc[-test_size:]
 
-        X_train, y_train = train_df[feature_cols], train_df[["Target_1d", "Target_5d", "Target_20d"]]
-        X_test, y_test = test_df[feature_cols], test_df[["Target_1d", "Target_5d", "Target_20d"]]
+        X_train, y_train = train_df[FEATURE_COLS], train_df[["Target_1d", "Target_5d", "Target_20d"]]
+        X_test, y_test = test_df[FEATURE_COLS], test_df[["Target_1d", "Target_5d", "Target_20d"]]
 
         if len(X_train) < 5 or len(X_test) == 0:
             print(f"❌ Недостатньо тренувальних зразків для {ticker} (train: {len(X_train)}). Пропускаємо.")
             continue
 
-        model = RandomForestRegressor(
+        # Спочатку оцінюємо чесний Out-of-Sample MAE на тестовій вибірці
+        eval_model = RandomForestRegressor(
             n_estimators=200,
-            max_depth=12,
-            min_samples_leaf=3,
+            max_depth=10,
+            min_samples_leaf=4,
             random_state=42,
+            n_jobs=-1,
         )
-        model.fit(X_train, y_train)
-
-        # Валідація
-        predictions = model.predict(X_test)
+        eval_model.fit(X_train, y_train)
+        predictions = eval_model.predict(X_test)
         mae_1d, mae_5d, mae_20d = mean_absolute_error(y_test, predictions, multioutput="raw_values")
         mae_1d_pct = mae_1d * 100
         mae_5d_pct = mae_5d * 100
         mae_20d_pct = mae_20d * 100
-        mae_1d_usd = current_price * mae_1d
-        mae_5d_usd = current_price * mae_5d
-        mae_20d_usd = current_price * mae_20d
+
+        # Довчаємо фінальну бойову модель на всіх доступних історичних зразках для максимальної свіжості
+        model = RandomForestRegressor(
+            n_estimators=200,
+            max_depth=10,
+            min_samples_leaf=4,
+            random_state=42,
+            n_jobs=-1,
+        )
+        model.fit(df[FEATURE_COLS], df[["Target_1d", "Target_5d", "Target_20d"]])
 
         # Базові прогнози ШІ
         preds = model.predict(latest_features)[0]
-        tomorrow_pred = current_price * (1 + preds[0])
-        week_pred = current_price * (1 + preds[1])
-        month_pred = current_price * (1 + preds[2])
+        raw_1d = current_price * (1.0 + preds[0])
+        raw_5d = current_price * (1.0 + preds[1])
+        raw_20d = current_price * (1.0 + preds[2])
 
-        # 2. 🧠 CONTINUOUS LEARNING: Коригування зсуву та визначення бейджа надійності
+        # 2. CONTINUOUS LEARNING: Відсоткова корекція зсуву (Bias Correction)
         ticker_metrics = calculate_ticker_metrics(df_eval, ticker)
-        bias_1d = ticker_metrics["1d"]["bias"]
-        bias_5d = ticker_metrics["5d"]["bias"]
-        bias_20d = ticker_metrics["20d"]["bias"]
+        tomorrow_pred = apply_bias_correction(raw_1d, current_price, ticker_metrics, "1d", vix_current)
+        week_pred = apply_bias_correction(raw_5d, current_price, ticker_metrics, "5d", vix_current)
+        month_pred = apply_bias_correction(raw_20d, current_price, ticker_metrics, "20d", vix_current)
+
         count_1d = ticker_metrics["1d"]["count"]
-        count_5d = ticker_metrics["5d"]["count"]
-        count_20d = ticker_metrics["20d"]["count"]
         win_rate_1d = ticker_metrics["1d"]["win_rate"]
 
-        damping_factor = 0.2
-        vix_current = float(df["VIX_Close"].iloc[-1]) if "VIX_Close" in df.columns and not df["VIX_Close"].dropna().empty else 15.0
-
-        capped_bias_1d = 0.0
-        capped_bias_5d = 0.0
-        capped_bias_20d = 0.0
-
-        # 1d: компенсація лише при >= 5 свіжих оцінок, з демпфінгом 20% і капом ±0.5%
-        if count_1d >= 5:
-            cap_limit_1d = 0.005 * current_price
-            capped_bias_1d = max(-cap_limit_1d, min(bias_1d * damping_factor, cap_limit_1d))
-            if vix_current > 22:
-                capped_bias_1d = 0.0
-            tomorrow_pred += capped_bias_1d
-
-        # 5d: компенсація лише при >= 5 свіжих оцінок, з демпфінгом 20% і капом ±1.5%
-        if count_5d >= 5:
-            cap_limit_5d = 0.015 * current_price
-            capped_bias_5d = max(-cap_limit_5d, min(bias_5d * damping_factor, cap_limit_5d))
-            if vix_current > 22:
-                capped_bias_5d = 0.0
-            week_pred += capped_bias_5d
-
-        if count_20d >= 5:
-            cap_limit_20d = 0.030 * current_price
-            capped_bias_20d = max(-cap_limit_20d, min(bias_20d * damping_factor, cap_limit_20d))
-            if vix_current > 22:
-                capped_bias_20d = 0.0
-            month_pred += capped_bias_20d
-
-        # Визначаємо емодзі-бейдж надійності
         if count_1d < 5:
             badge = "🟡"
-        elif win_rate_1d >= 65.0:
+        elif win_rate_1d >= 60.0:
             badge = "🟢"
         elif win_rate_1d >= 45.0:
             badge = "🟡"
         else:
             badge = "🔴"
 
-        # Зберігаємо ваги моделі
         model_path = f"models/{ticker}_model.joblib"
         joblib.dump(model, model_path)
         successful_models += 1
 
         last_date = latest_features.index[-1]
-        ua_days = {0: "Понеділок", 1: "Вівторок", 2: "Середа", 3: "Четвер", 4: "П'ятниця", 5: "Субота", 6: "Неділя"}
-
-        date_1d = last_date + pd.offsets.BusinessDay(1)
-        date_5d = last_date + pd.offsets.BusinessDay(5)
-        date_20d = last_date + pd.offsets.BusinessDay(20)
-
-        day_1d_text = f"{ua_days[date_1d.weekday()]} ({date_1d.strftime('%d.%m')})"
-        day_5d_text = f"{ua_days[date_5d.weekday()]} ({date_5d.strftime('%d.%m')})"
-        day_20d_text = f"{ua_days[date_20d.weekday()]} ({date_20d.strftime('%d.%m')})"
-
-        # 3. 💾 Зберігаємо у лог ВЖЕ скориговані прогнози
         daily_predictions.append(
             {
                 "date": last_date.strftime("%Y-%m-%d"),
@@ -390,17 +164,21 @@ def train_and_upload():
             }
         )
 
-        emoji_1d = "📈" if tomorrow_pred > current_price else "📉"
-        emoji_5d = "🚀" if week_pred > current_price else "📉"
-        emoji_20d = "🚀" if month_pred > current_price else "📉"
+        pct_1d = (tomorrow_pred - current_price) / current_price * 100
+        pct_5d = (week_pred - current_price) / current_price * 100
+        pct_20d = (month_pred - current_price) / current_price * 100
+        wr_str = f" WR:{win_rate_1d:.0f}%" if count_1d >= 5 else ""
 
-        win_rate_str = f" [WR: {win_rate_1d:.0f}%]" if count_1d >= 5 else ""
+        tg_report += (
+            f"{badge} *{ticker}* `${current_price:.2f}`{wr_str} | "
+            f"1d: `{pct_1d:+.1f}%` (${tomorrow_pred:.2f}) • "
+            f"5d: `{pct_5d:+.1f}%` • "
+            f"20d: `{pct_20d:+.1f}%` _(MAE {mae_1d_pct:.1f}%/{mae_5d_pct:.1f}%/{mae_20d_pct:.1f}%)_\n"
+        )
 
-        # Формуємо рядок звіту
-        tg_report += f"🔹 {badge} *{ticker}* (Поточна: ${current_price:.2f}){win_rate_str}:\n"
-        tg_report += f"  • {day_1d_text} {emoji_1d}: ${tomorrow_pred:.2f} | MAE: {mae_1d_pct:.2f}% (${mae_1d_usd:.2f})\n"
-        tg_report += f"  • {day_5d_text} {emoji_5d}: ${week_pred:.2f} | MAE: {mae_5d_pct:.2f}% (${mae_5d_usd:.2f})\n"
-        tg_report += f"  • {day_20d_text} (місяць) {emoji_20d}: ${month_pred:.2f} | MAE: {mae_20d_pct:.2f}% (${mae_20d_usd:.2f})\n\n"
+    # Зберігаємо локальну копію сьогодняшніх прогнозів для Скрипта-Арбітра
+    if daily_predictions:
+        pd.DataFrame(daily_predictions).to_csv("data/latest_predictions_rf.csv", index=False)
 
     # Синхронізація моделей на HF
     if hf_token and hf_model_repo and successful_models > 0:
@@ -413,19 +191,21 @@ def train_and_upload():
                 repo_type="model",
                 token=hf_token,
             )
-            tg_report += "☁️ *Hugging Face:* Моделі успішно синхронізовано."
+            tg_report += "\n☁️ *HF:* Моделі RF синхронізовано."
         except Exception as e:
-            tg_report += f"⚠️ *Hugging Face:* Помилка завантаження ваг: {e}"
+            tg_report += f"\n⚠️ *HF:* Помилка завантаження ваг: {e}"
     else:
-        tg_report += "ℹ️ *Hugging Face:* Синхронізацію пропущено (немає токенів)."
+        tg_report += "\nℹ️ *HF:* Синхронізацію пропущено."
 
-    send_telegram_report(tg_report)
+    if not quiet_tg:
+        send_telegram_report(tg_report)
+    else:
+        print("ℹ️ QUIET_TELEGRAM=1: індивідуальний звіт RF приховано (буде надіслано об'єднаний дайджест Арбітра).")
 
     # Збереження історії прогнозів на HF
     if hf_token and hf_repo_inside and daily_predictions:
         try:
             print("💾 Синхронізація історії прогнозів з Hugging Face...")
-
             api = HfApi()
             file_path = "predictions_history.csv"
             remote_url = f"https://huggingface.co/datasets/{hf_repo_inside}/raw/main/{file_path}"
@@ -434,7 +214,9 @@ def train_and_upload():
                 df_history = pd.read_csv(remote_url)
                 print("📜 Знайдено існуючу історію прогнозів. Оновлюємо...")
             except Exception:
-                df_history = pd.DataFrame(columns=["date", "ticker", "current_price", "pred_1d", "pred_5d", "pred_20d"])
+                df_history = pd.DataFrame(
+                    columns=["date", "ticker", "current_price", "pred_1d", "pred_5d", "pred_20d"]
+                )
                 print("✨ Створюємо новий файл історії прогнозів...")
 
             df_new = pd.DataFrame(daily_predictions)
@@ -451,7 +233,7 @@ def train_and_upload():
             )
             print("✅ Історію прогнозів успішно засинкронено в Hugging Face!")
         except Exception as e:
-            print(f"⚠️ Не вдалося зберегти історію прогнозів на HF (але пайплайн продовжує роботу): {e}")
+            print(f"⚠️ Не вдалося зберегти історію прогнозів на HF: {e}")
 
 
 if __name__ == "__main__":

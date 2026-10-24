@@ -63,7 +63,7 @@ jobs:
           -v $(pwd)/test_data:/app/data \
           test-image:local python fetch_data.py
           
-        echo "🏗️ 2. Запускаємо перевірку тренування моделей для: $TARGET_TICKERS"
+        echo "🏗️ 2. Запускаємо перевірку тренування моделей та ШІ-Арбітра для: $TARGET_TICKERS"
         docker run --rm \
           -e STOCK_TICKER="$TARGET_TICKERS" \
           -e HF_TOKEN="${{ secrets.HF_TOKEN }}" \
@@ -72,6 +72,12 @@ jobs:
           -v $(pwd)/test_data:/app/data \
           -v $(pwd)/test_models:/app/models \
           test-image:local python train.py
+
+        docker run --rm \
+          -e STOCK_TICKER="$TARGET_TICKERS" \
+          -e HF_REPO="nadtoka/predictive-stock-dataset" \
+          -v $(pwd)/test_data:/app/data \
+          test-image:local python arbiter.py
 
     - name: Log in to GitHub Container Registry
       run: |

@@ -2,6 +2,7 @@ venv/
 .venv/
 data/
 models/
+models_xgb/
 .git/
 .github/
 __pycache__/

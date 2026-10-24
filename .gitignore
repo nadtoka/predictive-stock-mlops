@@ -37,6 +37,7 @@ MANIFEST
 
 # === MLOps Models ===
 models/
+models_xgb/
 *.joblib
 
 # === IDE & OS specific files ===

@@ -36,7 +36,8 @@ def upload_to_huggingface():
             folder_path="data",
             repo_id=hf_repo,
             repo_type="dataset",
-            token=hf_token
+            token=hf_token,
+            ignore_patterns=["latest_predictions*.csv", "evaluation_history*local.csv"],
         )
         print("🔥 Датасет успішно оновлено на Hugging Face Hub!")
     except Exception as e:

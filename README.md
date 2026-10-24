@@ -1,4 +1,4 @@
-# Predictive Stock MLOps Project 🚀 (v3.2)
+# Predictive Stock MLOps Project 🚀 (v3.3)
 
 🌐 **Language / Мова:** [English] | [🇺🇦 Українська](README.uk.md)
 
@@ -6,7 +6,7 @@
 
 An end-to-end MLOps project for automated financial data ingestion, daily model retraining (Continuous Training) optimized for each individual asset, artifact versioning in the Hugging Face Hub, and automated operational monitoring via Telegram.
 
-In version **v3.2**, the system expands into a parallel A/B model tournament with Random Forest and XGBoost, while adding native support for fresh IPO-era equities through elastic rolling windows and resilient short-history handling. This release improves production reliability during young-asset onboarding and stabilizes feedback loops under volatile market conditions.
+In version **v3.3**, the system introduces an **AI Arbiter (`arbiter.py`)** that evaluates Random Forest vs. XGBoost head-to-head, computes a Win-Rate-weighted ensemble forecast, and delivers a single compact Telegram digest. It also upgrades the feature pipeline (`features.py`) to **24 fully stationary (relative) indicators** with a 20-day validation embargo buffer to eliminate look-ahead leakage.
 
 ---
 
@@ -42,35 +42,33 @@ The project implements a fully automated, fault-tolerant AI lifecycle divided in
 * Protects against non-trading days and exchange holidays by resolving the next actual market session instead of using a naive calendar BusinessDay shift.
 * Automatically synchronizes the evaluation grid into `evaluation_history.csv` hosted in Hugging Face Datasets and fires an elastic, line-by-line chunked analytical feedback report to Telegram split at 3800 characters per message.
 
-### 4. Public Client Inference (`predict.py`)
+### 4. AI Arbiter & Ensemble Digest (`arbiter.py`)
+* Compares Random Forest and XGBoost head-to-head across all historical evaluations (1d, 5d, 20d) and selects the reigning champion per equity over the latest 14-day window.
+* Blends both models into a Win-Rate-weighted ensemble forecast.
+* Replaces 4 verbose Telegram dumps with a single compact, scannable digest highlighting **Top Consensus Signals** (where both models agree 🤝 and WR ≥ 60%) followed by one-line summaries for remaining assets.
+
+### 5. Public Client Inference (`predict.py`)
 * A lightweight script for end-users or external integrations (on-demand inference).
-* Operates token-free: streams the latest verified model weights directly from the Hugging Face Hub, builds the corresponding feature graph locally for the current date using a 2-year lookback window (`period="2y"`), and instantly outputs the triple forecast to the console: **1d, 5d, and 20d**.
+* Operates token-free: streams the latest verified model weights (RF & XGBoost) from the Hugging Face Hub, builds the 24 stationary features (`features.py`), and outputs the ensemble forecast for **1d, 5d, and 20d**.
 
 ---
 
-## 📊 Input Feature Matrix (20 Feature Columns)
+## 📊 Input Feature Matrix (24 Stationary Feature Columns in `features.py`)
 
-The model utilizes a balanced blend of distinct feature categories:
+The models use a strictly stationary, relative indicator stack free from raw price scale bias and look-ahead leakage:
 
 | Category | Feature Name | Indicator Description |
 | :--- | :--- | :--- |
-| **Core Technicals** | `Close`, `Volume` | Current closing price and trading volume |
-| | `MA_5`, `MA_20` | Short-term moving averages (weekly and monthly trends) |
-| | `Daily_Return`, `Volatility_5` | Daily percentage return and historical volatility over 5 days |
-| **Session Structure** | `Intraday_Return`, `Day_Range` | Intra-session price movement and trading amplitude (High/Low) |
-| | `Gap` | Nightly price gap (opening price dislocation) |
-| **Calendar-Based** | `Day_of_Week` | Day of the week index to capture "Friday profit-taking" patterns |
-| **Volume Analytics**| `Volume_Ratio` | Volume spike tracking (current volume vs. 15-day average) |
-| **Macro Context** | `SP500_Return`, `VIX_Close` | Benchmark S&P 500 returns and Wall Street implied volatility index |
-| **Momentum & Shocks**| `RSI_14` | Relative Strength Index to identify overbought/oversold regions |
-| | `Distance_to_MA200` | Price deviation from the global long-term trend (200-day SMA) |
-| | `ATR_Ratio` | Normalized price shock indicator (True Range / ATR_14) |
-| **Fundamentals** | `Earnings_Season` | Corporate earnings season flag (active during Jan, Apr, Jul, Oct) |
-| | `PE_Ratio`, `PS_Ratio` | Dynamic daily Price-to-Earnings and Price-to-Sales multipliers |
-| | `Revenue_Growth` | Business scaling speed based on the latest quarterly reports |
-| | `Analyst_Upside` | Wall Street consensus upside potential ((targetMeanPrice - Close) / Close) |
-| | `PE_Expansion` | Forward earnings growth expansion multiplier (forwardPE / trailingPE) |
-| | `Analyst_Score` | Wall Street consensus rating score (recommendationMean from 1.0 to 5.0) |
+| **Return Momentum** | `Daily_Return`, `Return_5d`, `Return_20d` | Relative percentage returns over 1, 5, and 20 sessions |
+| **Trend Distance** | `Distance_to_MA5`, `Distance_to_MA20` | Relative price deviation from weekly and monthly SMAs |
+| | `Distance_to_MA50`, `Distance_to_MA200` | Relative price deviation from quarterly and annual SMAs |
+| **Volatility** | `Volatility_5`, `Volatility_20` | 5-day and 20-day rolling return standard deviation |
+| **Session Structure** | `Intraday_Return`, `Day_Range`, `Gap` | Intra-session move, High/Low range, and overnight opening gap |
+| **Calendar & Volume** | `Day_of_Week`, `Earnings_Season`, `Volume_Ratio` | Weekday index, earnings month flag, and volume vs 15-day average |
+| **Macro & Alpha** | `SP500_Return`, `Relative_Return_1d` | Benchmark S&P 500 return and stock-specific daily alpha |
+| | `VIX_Close`, `VIX_Change` | Wall Street fear index level and daily percentage change |
+| **Oscillators & Shocks**| `RSI_14`, `MACD_Hist`, `BB_Position` | 14-day RSI, price-normalized MACD histogram, and Bollinger Band Z-score |
+| | `ATR_Ratio`, `ATR_Pct` | True Range shock ratio (TR / ATR_14) and ATR as % of price |
 
 ---
 
@@ -164,13 +162,15 @@ predictive-stock-mlops/
 ├── models/                 # Local serialized model binaries (Git ignored)
 ├── models_xgb/             # Local cached XGBoost model binaries (Git ignored)
 ├── Dockerfile              # Instructions for building the immutable runtime
+├── features.py             # Shared 24-stationary-feature pipeline, metrics & Telegram engine
 ├── fetch_data.py           # Data Ingestion module (Equities + S&P 500 + VIX)
-├── run_pipeline.sh         # Main orchestration script for the A/B model pipeline
-├── train.py                # Random Forest A-contour, 16-feature assembly, dual MAE, TG engine
-├── train_xgb.py            # XGBoost B-contour, multi-output training, TG engine
-├── evaluate.py             # Automated Random Forest accuracy auditor, MAE % and Win Rate tracker
+├── run_pipeline.sh         # Main orchestration script (Fetch -> Evaluate -> Train -> Arbiter)
+├── train.py                # Random Forest A-contour, 20-day validation embargo, HF sync
+├── train_xgb.py            # XGBoost B-contour, multi-output training, HF sync
+├── evaluate.py             # Automated Random Forest accuracy auditor from local data/ cache
 ├── evaluate_xgb.py         # Automated XGBoost accuracy auditor and market feedback loop
-├── predict.py              # Lightweight client inference (On-demand 1d and 5d forecasts)
+├── arbiter.py              # AI Arbiter (RF vs XGBoost vs Ensemble) & unified Telegram digest
+├── predict.py              # Lightweight ensemble client inference (1d, 5d, and 20d forecasts)
 └── requirements.txt        # Frozen dependency tree (scikit-learn, joblib, pandas, yfinance)
 ```
 

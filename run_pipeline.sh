@@ -45,8 +45,29 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 🌲 2. Контур A: RANDOM FOREST
-echo "🧠 2A. Тренування Random Forest..."
+# 📊 2. СПОЧАТКУ АУДИТ минулих прогнозів (щоб нові моделі одразу вчилися на свіжих помилках!)
+echo "📊 2A. Аудит Random Forest..."
+docker run --rm \
+  -e HF_TOKEN="$HF_TOKEN" \
+  -e HF_REPO="$HF_REPO" \
+  -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+  -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
+  -e QUIET_TELEGRAM="1" \
+  -v "$DATA_DIR":/app/data \
+  $IMAGE python evaluate.py
+
+echo "📊 2B. Аудит XGBoost..."
+docker run --rm \
+  -e HF_TOKEN="$HF_TOKEN" \
+  -e HF_REPO="$HF_REPO" \
+  -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+  -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
+  -e QUIET_TELEGRAM="1" \
+  -v "$DATA_DIR":/app/data \
+  $IMAGE python evaluate_xgb.py
+
+# 🧠 3. ТРЕНУВАННЯ МОДЕЛЕЙ (з урахуванням свіжої бази помилок, QUIET_TELEGRAM=1 щоб не спамити)
+echo "🌲 3A. Тренування Random Forest..."
 docker run --rm \
   -e STOCK_TICKER="$STOCK_TICKER" \
   -e HF_TOKEN="$HF_TOKEN" \
@@ -54,20 +75,11 @@ docker run --rm \
   -e HF_REPO="$HF_REPO" \
   -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
   -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
+  -e QUIET_TELEGRAM="1" \
   -v "$DATA_DIR":/app/data \
   $IMAGE python train.py
 
-echo "📊 2B. Аудит Random Forest..."
-docker run --rm \
-  -e HF_TOKEN="$HF_TOKEN" \
-  -e HF_REPO="$HF_REPO" \
-  -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
-  -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
-  -v "$DATA_DIR":/app/data \
-  $IMAGE python evaluate.py
-
-# ⚡ 3. Контур B: XGBOOST
-echo "⚡ 3A. Тренування XGBoost..."
+echo "⚡ 3B. Тренування XGBoost..."
 docker run --rm \
   -e STOCK_TICKER="$STOCK_TICKER" \
   -e HF_TOKEN="$HF_TOKEN" \
@@ -75,17 +87,20 @@ docker run --rm \
   -e HF_REPO="$HF_REPO" \
   -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
   -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
+  -e QUIET_TELEGRAM="1" \
   -v "$DATA_DIR":/app/data \
   $IMAGE python train_xgb.py
 
-echo "📊 3B. Аудит XGBoost..."
+# ⚖️ 4. ФІНАЛЬНИЙ АРБІТР ТА ЄДИНИЙ ДАЙДЖЕСТ У TELEGRAM
+echo "⚖️ 4. Запуск ШІ-Арбітра та відправка єдиного дайджесту..."
 docker run --rm \
+  -e STOCK_TICKER="$STOCK_TICKER" \
   -e HF_TOKEN="$HF_TOKEN" \
   -e HF_REPO="$HF_REPO" \
   -e TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
   -e TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
   -v "$DATA_DIR":/app/data \
-  $IMAGE python evaluate_xgb.py
+  $IMAGE python arbiter.py
 
 echo "=============================================================================="
 echo "✅ A/B PIPELINE FINISHED: $(date)"
