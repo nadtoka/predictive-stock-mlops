@@ -102,6 +102,11 @@ docker run --rm \
   -v "$DATA_DIR":/app/data \
   $IMAGE python arbiter.py
 
+# 🧹 5. ОЧИЩЕННЯ DOCKER ВІД ЗАСТАРІЛИХ ДАНИХ
+echo "🧹 5. Очищення старих шарів та dangling Docker-образів..."
+docker image prune -f
+docker builder prune -f --filter "until=168h" 2>/dev/null || true
+
 echo "=============================================================================="
 echo "✅ A/B PIPELINE FINISHED: $(date)"
 echo "=============================================================================="
